@@ -8,6 +8,7 @@ import (
 )
 
 type keyValueServer struct {
+	ln      net.Listener
 	clients int
 }
 
@@ -44,8 +45,14 @@ func (kvs *keyValueServer) Count() int {
 
 func (kvs *keyValueServer) handle(conn net.Conn) {
 	for {
-		var command, key, value string
-		fmt.Fscanf(conn, "%s, %s, %s", &command, &key, &value)
+		var command, key string
+		var value []byte
+		fmt.Fscanf(conn, "%s, %s, %s", &command, &key, value)
+		if command == "set" {
+			set(key, value)
+		} else if command == "get" {
+			get(key)
+		}
 	}
 }
 
