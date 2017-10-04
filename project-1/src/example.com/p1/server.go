@@ -2,28 +2,44 @@
 
 package p1
 
+import (
+	"fmt"
+	"net"
+)
+
 type keyValueServer struct {
-    // TODO: implement this!
+	clients int
 }
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
-    // TODO: implement this!
-    return nil
+	return &keyValueServer{}
 }
 
 func (kvs *keyValueServer) Start(port int) error {
-    // TODO: implement this!
-    return nil
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+		go kvs.handle(conn)
+	}
+	return nil
 }
 
 func (kvs *keyValueServer) Close() {
-    // TODO: implement this!
+	// TODO: implement this!
 }
 
 func (kvs *keyValueServer) Count() int {
-    // TODO: implement this!
-    return -1
+	return kvs.clients
+}
+
+func (kvs *keyValueServer) handle(conn net.Conn) {
 }
 
 // TODO: add additional methods/functions below!
