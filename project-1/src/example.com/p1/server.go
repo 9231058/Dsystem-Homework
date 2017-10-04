@@ -13,7 +13,9 @@ type keyValueServer struct {
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
-	return &keyValueServer{}
+	return &keyValueServer{
+		clients: 0,
+	}
 }
 
 func (kvs *keyValueServer) Start(port int) error {
@@ -26,6 +28,7 @@ func (kvs *keyValueServer) Start(port int) error {
 		if err != nil {
 			return err
 		}
+		kvs.clients++
 		go kvs.handle(conn)
 	}
 	return nil
@@ -40,6 +43,10 @@ func (kvs *keyValueServer) Count() int {
 }
 
 func (kvs *keyValueServer) handle(conn net.Conn) {
+	for {
+		var command, key, value string
+		fmt.Fscanf(conn, "%s, %s, %s", &command, &key, &value)
+	}
 }
 
 // TODO: add additional methods/functions below!
