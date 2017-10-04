@@ -24,14 +24,7 @@ func (kvs *keyValueServer) Start(port int) error {
 	if err != nil {
 		return err
 	}
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			return err
-		}
-		kvs.clients++
-		go kvs.handle(conn)
-	}
+	kvs.ln = ln
 	return nil
 }
 
@@ -41,6 +34,18 @@ func (kvs *keyValueServer) Close() {
 
 func (kvs *keyValueServer) Count() int {
 	return kvs.clients
+}
+
+func (kvs *keyValueServer) listen() {
+	for {
+		conn, err := kvs.ln.Accept()
+		if err != nil {
+			return
+		}
+		kvs.clients++
+		go kvs.handle(conn)
+	}
+
 }
 
 func (kvs *keyValueServer) handle(conn net.Conn) {
