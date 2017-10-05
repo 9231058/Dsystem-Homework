@@ -3,12 +3,21 @@
 package p1
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 )
 
+type request struct {
+	command string
+	key     string
+	value   []byte
+	writer  *bufio.Writer
+}
+
 type keyValueServer struct {
 	ln      net.Listener
+	ch      chan *request
 	clients int
 }
 
@@ -16,6 +25,7 @@ type keyValueServer struct {
 func New() KeyValueServer {
 	return &keyValueServer{
 		clients: 0,
+		ch:      make(chan *request),
 	}
 }
 
@@ -25,6 +35,9 @@ func (kvs *keyValueServer) Start(port int) error {
 		return err
 	}
 	kvs.ln = ln
+	createDB()
+	go kvs.dispatch()
+	go kvs.listen()
 	return nil
 }
 
@@ -49,16 +62,64 @@ func (kvs *keyValueServer) listen() {
 }
 
 func (kvs *keyValueServer) handle(conn net.Conn) {
+	cr := bufio.NewReader(conn)
+	cw := bufio.NewWriter(conn)
 	for {
 		var command, key string
 		var value []byte
-		fmt.Fscanf(conn, "%s, %s, %s", &command, &key, value)
-		if command == "set" {
-			set(key, value)
-		} else if command == "get" {
-			get(key)
+
+		buf, err := cr.ReadBytes(',')
+		if err != nil {
+			kvs.clients--
+			return
+		}
+		command = string(buf[:len(buf)-1])
+		if command == "get" {
+			buf, err := cr.ReadBytes('\n')
+			if err != nil {
+				kvs.clients--
+				return
+			}
+			key = string(buf[:len(buf)-1])
+			kvs.ch <- &request{
+				command: "get",
+				key:     key,
+				writer:  cw,
+			}
+		} else if command == "set" {
+			buf, err := cr.ReadBytes(',')
+			if err != nil {
+				kvs.clients--
+				return
+			}
+			key = string(buf[:len(buf)-1])
+			buf, err = cr.ReadBytes('\n')
+			if err != nil {
+				kvs.clients--
+				return
+			}
+			value = buf[:len(buf)-1]
+			kvs.ch <- &request{
+				command: "set",
+				key:     key,
+				value:   value,
+				writer:  cw,
+			}
 		}
 	}
 }
 
-// TODO: add additional methods/functions below!
+func (kvs *keyValueServer) dispatch() {
+	for {
+		select {
+		case r := <-kvs.ch:
+			if r.command == "get" {
+				r.writer.WriteString(fmt.Sprintf("%s,%s\n", r.key, get(r.key)))
+				r.writer.Flush()
+			}
+			if r.command == "set" {
+				set(r.key, r.value)
+			}
+		}
+	}
+}
