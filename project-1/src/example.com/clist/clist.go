@@ -4,6 +4,7 @@ import (
 	"container/list"
 )
 
+// ConcurrentList represents a synchronized doubly linked list. The zero value for List is an empty list ready to use.
 type ConcurrentList struct {
 	mutex chan int
 	items *list.List
@@ -33,12 +34,18 @@ func (cl *ConcurrentList) Len() int {
 	return cl.items.Len()
 }
 
-// Remove removes e from l if e is an element of list l. It returns the element value e.Value.
-func (cl *ConcurrentList) Remove(e *list.Element) interface{} {
+// Remove removes first occurrence of v from l if v is an element of list l. It returns the element value v.
+func (cl *ConcurrentList) Remove(v interface{}) interface{} {
 	cl.mutex <- 1
 	defer func() { <-cl.mutex }()
 
-	return cl.items.Remove(e)
+	for e := cl.items.Front(); e != nil; e = e.Next() {
+		if e.Value == v {
+			return cl.items.Remove(e)
+		}
+	}
+
+	return nil
 }
 
 // Iter iterates over the items in the concurrent list
