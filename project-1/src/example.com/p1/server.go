@@ -21,8 +21,8 @@ type keyValueServer struct {
 func New() KeyValueServer {
 	return &keyValueServer{
 		clients: clist.New(),
-		req:     make(chan *request, 500),
-		res:     make(chan *request, 500),
+		req:     make(chan *request, 12000),
+		res:     make(chan *request, 12000),
 	}
 }
 
@@ -40,7 +40,7 @@ func (kvs *keyValueServer) Start(port int) error {
 }
 
 func (kvs *keyValueServer) Close() {
-	// TODO: implement this!
+	kvs.ln.Close()
 }
 
 func (kvs *keyValueServer) Count() int {
