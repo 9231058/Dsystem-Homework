@@ -6,14 +6,13 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"runtime"
 
 	"../clist"
 )
 
 type keyValueServer struct {
 	ln      net.Listener
-	res     chan *request
-	req     chan *request
 	clients *clist.ConcurrentList
 }
 
@@ -21,8 +20,6 @@ type keyValueServer struct {
 func New() KeyValueServer {
 	return &keyValueServer{
 		clients: clist.New(),
-		req:     make(chan *request, 12000),
-		res:     make(chan *request, 12000),
 	}
 }
 
@@ -35,7 +32,6 @@ func (kvs *keyValueServer) Start(port int) error {
 	createDB()
 	go kvs.dispatch()
 	go kvs.listen()
-	go kvs.sender()
 	return nil
 }
 
@@ -58,26 +54,21 @@ func (kvs *keyValueServer) listen() {
 			conn:   conn,
 			writer: bufio.NewWriter(conn),
 			reader: bufio.NewReader(conn),
+			req:    make(chan *request, 500),
+			res:    make(chan *request, 500),
 		}
 		kvs.clients.PushBack(c)
+		go kvs.sender(c)
 		go kvs.receiver(c)
 	}
 
 }
 
-func (kvs *keyValueServer) sender() {
+func (kvs *keyValueServer) sender(c *client) {
 	for {
-		select {
-		case r := <-kvs.res:
-			cs := kvs.clients.Iter()
-			for c := range cs {
-				c.Value.(*client).writer.WriteString(fmt.Sprintf("%s,%s\n", r.key, r.value))
-				c.Value.(*client).writer.Flush()
-
-			}
-		default:
-			continue
-		}
+		r := <-c.res
+		c.writer.WriteString(fmt.Sprintf("%s,%s\n", r.key, r.value))
+		c.writer.Flush()
 	}
 }
 
@@ -101,7 +92,7 @@ func (kvs *keyValueServer) receiver(c *client) {
 				return
 			}
 			key = string(buf[:len(buf)-1])
-			kvs.req <- &request{
+			c.req <- &request{
 				command: "get",
 				key:     key,
 			}
@@ -116,7 +107,7 @@ func (kvs *keyValueServer) receiver(c *client) {
 				return
 			}
 			value = buf[:len(buf)-1]
-			kvs.req <- &request{
+			c.req <- &request{
 				command: "set",
 				key:     key,
 				value:   value,
@@ -127,17 +118,31 @@ func (kvs *keyValueServer) receiver(c *client) {
 
 func (kvs *keyValueServer) dispatch() {
 	for {
-		select {
-		case r := <-kvs.req:
-			if r.command == "get" {
-				kvs.res <- &request{
-					key:   r.key,
-					value: get(r.key),
+		var res []*request
+		for c := range kvs.clients.Iter() {
+			select {
+			case r := <-c.Value.(*client).req:
+				if r.command == "get" {
+					res = append(res, &request{
+						key:   r.key,
+						value: get(r.key),
+					})
+				}
+				if r.command == "set" {
+					set(r.key, r.value)
+				}
+			default:
+				continue
+			}
+		}
+		runtime.Gosched()
+		if len(res) != 0 {
+			for c := range kvs.clients.Iter() {
+				for _, r := range res {
+					c.Value.(*client).res <- r
 				}
 			}
-			if r.command == "set" {
-				set(r.key, r.value)
-			}
+
 		}
 	}
 }
