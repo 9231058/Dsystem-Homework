@@ -9,6 +9,7 @@ type ConcurrentList struct {
 	items *list.List
 }
 
+// New returns an initialized list.
 func New() *ConcurrentList {
 	return &ConcurrentList{
 		mutex: make(chan int, 1),
@@ -30,4 +31,28 @@ func (cl *ConcurrentList) Len() int {
 	defer func() { <-cl.mutex }()
 
 	return cl.items.Len()
+}
+
+// Remove removes e from l if e is an element of list l. It returns the element value e.Value.
+func (cl *ConcurrentList) Remove(e *list.Element) interface{} {
+	cl.mutex <- 1
+	defer func() { <-cl.mutex }()
+
+	return cl.items.Remove(e)
+}
+
+// Iter iterates over the items in the concurrent list
+func (cl *ConcurrentList) Iter() <-chan *list.Element {
+	c := make(chan *list.Element)
+
+	go func() {
+		cl.mutex <- 1
+		defer func() { <-cl.mutex }()
+		for e := cl.items.Front(); e != nil; e = e.Next() {
+			c <- e
+		}
+		close(c)
+	}()
+
+	return c
 }
