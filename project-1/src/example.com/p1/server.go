@@ -139,7 +139,11 @@ func (kvs *keyValueServer) dispatch() {
 		if len(res) != 0 {
 			for c := range kvs.clients.Iter() {
 				for _, r := range res {
-					c.Value.(*client).res <- r
+					select {
+					case c.Value.(*client).res <- r:
+					default:
+						break
+					}
 				}
 			}
 
