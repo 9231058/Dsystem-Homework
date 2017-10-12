@@ -6,26 +6,23 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-)
 
-type request struct {
-	command string
-	key     string
-	value   []byte
-	writer  *bufio.Writer
-}
+	"../clist"
+)
 
 type keyValueServer struct {
 	ln      net.Listener
-	ch      chan *request
-	clients int
+	res     chan *request
+	req     chan *request
+	clients *clist.ConcurrentList
 }
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
 	return &keyValueServer{
-		clients: 0,
-		ch:      make(chan *request),
+		clients: clist.New(),
+		req:     make(chan *request, 500),
+		res:     make(chan *request, 500),
 	}
 }
 
@@ -38,6 +35,7 @@ func (kvs *keyValueServer) Start(port int) error {
 	createDB()
 	go kvs.dispatch()
 	go kvs.listen()
+	go kvs.sender()
 	return nil
 }
 
@@ -46,7 +44,7 @@ func (kvs *keyValueServer) Close() {
 }
 
 func (kvs *keyValueServer) Count() int {
-	return kvs.clients
+	return kvs.clients.Len()
 }
 
 func (kvs *keyValueServer) listen() {
@@ -55,55 +53,73 @@ func (kvs *keyValueServer) listen() {
 		if err != nil {
 			return
 		}
-		kvs.clients++
-		go kvs.handle(conn)
+
+		c := &client{
+			conn:   conn,
+			writer: bufio.NewWriter(conn),
+			reader: bufio.NewReader(conn),
+		}
+		kvs.clients.PushBack(c)
+		go kvs.receiver(c)
 	}
 
 }
 
-func (kvs *keyValueServer) handle(conn net.Conn) {
-	cr := bufio.NewReader(conn)
-	cw := bufio.NewWriter(conn)
+func (kvs *keyValueServer) sender() {
+	for {
+		select {
+		case r := <-kvs.res:
+			cs := kvs.clients.Iter()
+			for c := range cs {
+				c.Value.(*client).writer.WriteString(fmt.Sprintf("%s,%s\n", r.key, r.value))
+				c.Value.(*client).writer.Flush()
+
+			}
+		default:
+			continue
+		}
+	}
+}
+
+func (kvs *keyValueServer) receiver(c *client) {
+
+	defer func() {
+		kvs.clients.Remove(c)
+	}()
 	for {
 		var command, key string
 		var value []byte
 
-		buf, err := cr.ReadBytes(',')
+		buf, err := c.reader.ReadBytes(',')
 		if err != nil {
-			kvs.clients--
 			return
 		}
 		command = string(buf[:len(buf)-1])
 		if command == "get" {
-			buf, err := cr.ReadBytes('\n')
+			buf, err := c.reader.ReadBytes('\n')
 			if err != nil {
-				kvs.clients--
 				return
 			}
 			key = string(buf[:len(buf)-1])
-			kvs.ch <- &request{
+			kvs.req <- &request{
 				command: "get",
 				key:     key,
-				writer:  cw,
 			}
 		} else if command == "set" {
-			buf, err := cr.ReadBytes(',')
+			buf, err := c.reader.ReadBytes(',')
 			if err != nil {
-				kvs.clients--
 				return
 			}
 			key = string(buf[:len(buf)-1])
-			buf, err = cr.ReadBytes('\n')
+			buf, err = c.reader.ReadBytes('\n')
 			if err != nil {
-				kvs.clients--
 				return
 			}
 			value = buf[:len(buf)-1]
-			kvs.ch <- &request{
+			kvs.req <- &request{
 				command: "set",
 				key:     key,
 				value:   value,
-				writer:  cw,
 			}
 		}
 	}
@@ -112,10 +128,12 @@ func (kvs *keyValueServer) handle(conn net.Conn) {
 func (kvs *keyValueServer) dispatch() {
 	for {
 		select {
-		case r := <-kvs.ch:
+		case r := <-kvs.req:
 			if r.command == "get" {
-				r.writer.WriteString(fmt.Sprintf("%s,%s\n", r.key, get(r.key)))
-				r.writer.Flush()
+				kvs.res <- &request{
+					key:   r.key,
+					value: get(r.key),
+				}
 			}
 			if r.command == "set" {
 				set(r.key, r.value)
