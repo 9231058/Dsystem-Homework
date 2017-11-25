@@ -102,4 +102,17 @@
     در ضمن این روش کارآیی پایین‌تری نسبت به سایر روش‌ها دارد ولی خطاپذیری آن از سایر روش‌ها بیشتر است.
 \end{itemize}
 
+\section{سوال سوم}
+
+\begin{latin}\begin{tabular}{| c | c | c | c | c | c | c | c |}
+    \hline
+    Real Time & Process & Lamport Time & Action & Contents & Q at P1 & Q at P2 & Q at P3 \\
+    \hline
+    1 & 1 & 121 & B & (request 121) & 121 & & \\
+    \hline
+    2 & 2 & 222 & B & (request 222) & 121 & 222 & 113 \\
+      & 3 & 113 & B & (request 113) & & & \\
+    \hline
+\end{tabular}\end{latin}
+
 \end{document}
