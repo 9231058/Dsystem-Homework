@@ -28,7 +28,7 @@
 
 \usepackage{xepersian}
 \settextfont[Path=fonts/]{Vazir.ttf}
-\setlatintextfont{Times New Roman}
+%\setlatintextfont{Times New Roman}
 
 %----------------------------------------------------------------------------------------
 %	TITLE SECTION
@@ -113,6 +113,46 @@
     2 & 2 & 222 & B & (request 222) & 121 & 222 & 113 \\
       & 3 & 113 & B & (request 113) & & & \\
     \hline
+    3 & 2 & 232 & R from 1 & (request 121) & 121 & 121 & 113 \\
+      & 3 & 133 & R from 1 & (request 121) & & 222 & 121 \\
+    \hline
+    4 & 1 & 231 & R from 2 & (request 222) & 113 & 113 & 113 \\
+      & 1 & 241 & R from 3 & (request 113) & 121 & 222 & 121 \\
+      & 2 & 242 & S to 1   & (reply 121)   & 222 &     & 222 \\
+      & 2 & 252 & R from 3 & (request 113) &     &     &     \\
+      & 3 & 233 & R from 2 & (request 222) &     &     &     \\
+    \hline
+    5 & 1 & 251 & S to 3 & (reply 113) & 121 & 222  & 113 \\
+      & 2 & 262 & S to 3 & (reply 113) & 222 &      & 121 \\
+      &   &     &        &             &     &      & 222 \\
+    \hline
+    6 & & & & & 121 & 222  & 113 \\
+      & & & & & 222 &      & 121 \\
+      & & & & &     &      & 222 \\
+    \hline
+    7 & 3 & 243 & ExCS & & 121 & 222  & 121 \\
+      &   &     &      & & 222 &      & 222 \\
+    \hline
+    8 & & & & & 121 & 222  & 121 \\
+      & & & & & 222 &      & 222 \\
+    \hline
+    9 & 3 & 253 & S to 1 & (reply 121) & 121 & 222  & \\
+      & 3 & 263 & S to 2 & (reply 222) & 222 &      & \\
+    \hline
+    10 & & & & & 121 & 222  & \\
+       & & & & & 222 &      & \\
+    \hline
+    11 & 1 & 261 & ExCS & & 222 & 222 & \\
+    \hline
+    12 & & & & & 222 & 222 & \\
+    \hline
+    13 & 1 & 271 & S to 2 & (reply 222) & & 222 & \\
+    \hline
+    14 & & & & & & 222 & \\
+    \hline
+    15 & 2 & 262 & ExCS & & & & \\
+    \hline
+
 \end{tabular}\end{latin}
 
 \end{document}
