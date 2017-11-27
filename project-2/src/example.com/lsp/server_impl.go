@@ -3,6 +3,7 @@
 package lsp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -44,18 +45,17 @@ func (s *server) handle() {
 		if err != nil || nbytes == 0 {
 			continue
 		}
-		// TODO: create message and determind its type
 		var mr Message
-		nbytes, err = fmt.Sscanf(string(buff), "%d%d%d%d", &mr.Type, &mr.ConnID, &mr.SeqNum, &mr.Size)
+		err = json.Unmarshal(buff, &mr)
 		if err != nil {
 			continue
 		}
-		mr.Payload = buff[nbytes : nbytes+mr.Size]
 		// Connection setup
 		if mr.Type == MsgConnect {
 			connID := s.lastConnID
 			mt := NewAck(connID, 0)
-			s.udpConn.WriteToUDP([]byte(fmt.Sprintf("%d%d%d%d", mt.Type, mt.ConnID, mt.SeqNum, mt.Size)), addr)
+			b, _ := json.Marshal(mt)
+			s.udpConn.WriteToUDP(b, addr)
 		}
 	}
 }
