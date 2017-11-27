@@ -40,19 +40,24 @@ func NewServer(port int, params *Params) (Server, error) {
 
 func (s *server) handle() {
 	for {
-		var buff []byte
+		buff := make([]byte, 1024)
 		nbytes, addr, err := s.udpConn.ReadFromUDP(buff)
 		if err != nil || nbytes == 0 {
 			continue
 		}
+		buff = buff[:nbytes]
+
+		// Message parsing
 		var mr Message
 		err = json.Unmarshal(buff, &mr)
 		if err != nil {
 			continue
 		}
+
 		// Connection setup
 		if mr.Type == MsgConnect {
 			connID := s.lastConnID
+			s.lastConnID++
 			mt := NewAck(connID, 0)
 			b, _ := json.Marshal(mt)
 			s.udpConn.WriteToUDP(b, addr)
