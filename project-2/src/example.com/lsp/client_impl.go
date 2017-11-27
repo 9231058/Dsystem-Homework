@@ -3,13 +3,14 @@
 package lsp
 
 import (
-	"math/rand"
-	"net"
+	"encoding/json"
+
+	net "../lspnet"
 )
 
 type client struct {
 	id      int
-	conn    net.Conn
+	udpConn *net.UDPConn
 	timeout int
 }
 
@@ -24,13 +25,39 @@ type client struct {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
-	conn, err := net.Dial("udp", hostport)
+	addr, err := net.ResolveUDPAddr("udp", hostport)
 	if err != nil {
 		return nil, err
 	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send connection request
+	mt := NewConnect()
+	b, _ := json.Marshal(mt)
+	_, err = conn.Write(b)
+	if err != nil {
+		return nil, err
+	}
+
+	// Receive connection acceptance
+	buff := make([]byte, 1024)
+	var mr Message
+	nbytes, err := conn.Read(buff)
+	if err != nil {
+		return nil, err
+	}
+	buff = buff[:nbytes]
+	err = json.Unmarshal(buff, &mt)
+	if err != nil {
+		return nil, err
+	}
+
 	return &client{
-		id:      rand.Int() + 1,
-		conn:    conn,
+		id:      mr.ConnID,
+		udpConn: conn,
 		timeout: params.EpochLimit,
 	}, nil
 }
@@ -41,15 +68,15 @@ func (c *client) ConnID() int {
 
 func (c *client) Read() ([]byte, error) {
 	buffer := make([]byte, 1024)
-	_, err := c.conn.Read(buffer)
+	_, err := c.udpConn.Read(buffer)
 	return buffer, err
 }
 
 func (c *client) Write(payload []byte) error {
-	_, err := c.conn.Write(payload)
+	_, err := c.udpConn.Write(payload)
 	return err
 }
 
 func (c *client) Close() error {
-	return c.conn.Close()
+	return c.udpConn.Close()
 }
