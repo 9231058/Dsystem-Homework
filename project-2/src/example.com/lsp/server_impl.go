@@ -11,7 +11,7 @@ import (
 
 type server struct {
 	udpConn    *net.UDPConn
-	lastConnId int
+	lastConnID int
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -45,10 +45,18 @@ func (s *server) handle() {
 			continue
 		}
 		// TODO: create message and determind its type
+		var mr Message
+		nbytes, err = fmt.Sscanf(string(buff), "%d%d%d%d", &mr.Type, &mr.ConnID, &mr.SeqNum, &mr.Size)
+		if err != nil {
+			continue
+		}
+		mr.Payload = buff[nbytes : nbytes+mr.Size]
 		// Connection setup
-		connID := s.lastConnId
-		m := NewAck(connID, 0)
-		s.udpConn.WriteToUDP(nil, addr)
+		if mr.Type == MsgConnect {
+			connID := s.lastConnID
+			mt := NewAck(connID, 0)
+			s.udpConn.WriteToUDP([]byte(fmt.Sprintf("%d%d%d%d", mt.Type, mt.ConnID, mt.SeqNum, mt.Size)), addr)
+		}
 	}
 }
 
