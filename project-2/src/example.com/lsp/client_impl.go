@@ -4,14 +4,23 @@ package lsp
 
 import (
 	"encoding/json"
+	"log"
+	"time"
 
 	net "../lspnet"
 )
 
 type client struct {
-	id      int
-	udpConn *net.UDPConn
+	id int
+	sq int
+
 	timeout int
+	retries int
+	window  chan Message
+
+	udpConn *net.UDPConn
+	acks    chan Message
+	data    chan Message
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -42,28 +51,86 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		return nil, err
 	}
 
-	// Receive connection acceptance
-	buff := make([]byte, 1024)
-	var mr Message
-	nbytes, err := conn.Read(buff)
-	if err != nil {
-		return nil, err
-	}
-	buff = buff[:nbytes]
-	err = json.Unmarshal(buff, &mt)
-	if err != nil {
-		return nil, err
-	}
+	// Receive connection acceptance or retry
+	epochEvents := time.Tick(time.Duration(params.EpochMillis) * time.Millisecond)
+	messageEvents := make(chan Message)
 
-	return &client{
-		id:      mr.ConnID,
-		udpConn: conn,
-		timeout: params.EpochLimit,
-	}, nil
+	go func() {
+		buff := make([]byte, 1024)
+		var mr Message
+		nbytes, err := conn.Read(buff)
+		if err != nil {
+			log.Fatal(err)
+		}
+		buff = buff[:nbytes]
+		err = json.Unmarshal(buff, &mr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		messageEvents <- mr
+	}()
+
+	for {
+		select {
+		case <-epochEvents:
+			// Timeout
+			mt := NewConnect()
+			b, _ := json.Marshal(mt)
+			_, err = conn.Write(b)
+			if err != nil {
+				return nil, err
+			}
+
+		case mr := <-messageEvents:
+			// Connection is accpeted
+			cli := &client{
+				id: mr.ConnID,
+				sq: 1,
+
+				udpConn: conn,
+				acks:    make(chan Message, params.WindowSize),
+				data:    make(chan Message, params.WindowSize),
+
+				timeout: params.EpochMillis,
+				retries: params.EpochLimit,
+				window:  make(chan Message, params.WindowSize-1),
+			}
+			go cli.receiver()
+			return cli, nil
+
+		}
+	}
 }
 
 func (c *client) ConnID() int {
 	return c.id
+}
+
+func (c *client) receiver() {
+	for {
+		buff := make([]byte, 1024)
+		var m Message
+		nbytes, err := c.udpConn.Read(buff)
+		if err != nil {
+			log.Fatal(err)
+			continue
+		}
+		buff = buff[:nbytes]
+		err = json.Unmarshal(buff, &m)
+		if err != nil {
+			log.Fatal(err)
+			continue
+		}
+		switch m.Type {
+		case MsgAck:
+			c.acks <- m
+		case MsgData:
+			c.data <- m
+		}
+	}
+}
+
+func (c *client) acker() {
 }
 
 func (c *client) Read() ([]byte, error) {
@@ -73,7 +140,13 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	_, err := c.udpConn.Write(payload)
+	// Create message
+	m := NewData(c.id, c.sq, len(payload), payload)
+	c.sq++
+
+	// Marshaling and send
+	b, _ := json.Marshal(m)
+	_, err := c.udpConn.Write(b)
 	return err
 }
 
