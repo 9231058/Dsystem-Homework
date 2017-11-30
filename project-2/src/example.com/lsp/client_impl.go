@@ -107,7 +107,9 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) receiver() {
+	var expectedSeqNum = 1
 	for {
+		// Read incomming message
 		buff := make([]byte, 1024)
 		var m Message
 		nbytes, err := c.udpConn.Read(buff)
@@ -121,22 +123,37 @@ func (c *client) receiver() {
 			log.Fatal(err)
 			continue
 		}
+
 		switch m.Type {
 		case MsgAck:
 			c.acks <- m
 		case MsgData:
-			c.data <- m
+			if m.SeqNum == expectedSeqNum {
+				expectedSeqNum++
+
+				// Send ACK
+				mt := NewAck(c.id, expectedSeqNum)
+				b, _ := json.Marshal(mt)
+				c.udpConn.Write(b)
+				c.data <- m
+			}
 		}
 	}
 }
 
-func (c *client) acker() {
+func (c *client) sender() {
+	var lastMessage *Message
+	for {
+		if lastMessage != nil {
+			select {}
+		} else {
+		}
+	}
 }
 
 func (c *client) Read() ([]byte, error) {
-	buffer := make([]byte, 1024)
-	_, err := c.udpConn.Read(buffer)
-	return buffer, err
+	m := <-c.data
+	return m.Payload, nil
 }
 
 func (c *client) Write(payload []byte) error {
