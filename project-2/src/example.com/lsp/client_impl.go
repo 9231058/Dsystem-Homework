@@ -130,13 +130,14 @@ func (c *client) receiver() {
 		case MsgData:
 			if m.SeqNum == expectedSeqNum {
 				expectedSeqNum++
-
-				// Send ACK
-				mt := NewAck(c.id, expectedSeqNum)
-				b, _ := json.Marshal(mt)
-				c.udpConn.Write(b)
 				c.data <- m
+			} else {
 			}
+
+			// Send ACK
+			mt := NewAck(c.id, expectedSeqNum)
+			b, _ := json.Marshal(mt)
+			c.udpConn.Write(b)
 		}
 	}
 }
