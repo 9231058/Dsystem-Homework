@@ -6,13 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	net "../lspnet"
 )
 
 type server struct {
-	udpConn    *net.UDPConn
-	lastConnID int
+	udpConn     *net.UDPConn
+	lastConnID  int
+	connections *sync.Map
+}
+
+type conn struct {
+	id   int
+	addr *net.UDPAddr
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -58,6 +65,12 @@ func (s *server) handle() {
 		if mr.Type == MsgConnect {
 			connID := s.lastConnID
 			s.lastConnID++
+
+			s.connections.Store(connID, &conn{
+				id:   connID,
+				addr: addr,
+			})
+
 			mt := NewAck(connID, 0)
 			b, _ := json.Marshal(mt)
 			s.udpConn.WriteToUDP(b, addr)
