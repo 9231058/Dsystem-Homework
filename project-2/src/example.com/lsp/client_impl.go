@@ -80,6 +80,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			if err != nil {
 				return nil, err
 			}
+			// TODO: epoch.limits
 
 		case mr := <-messageEvents:
 			// Connection is accpeted
@@ -96,6 +97,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				window:  make(chan Message, params.WindowSize-1),
 			}
 			go cli.receiver()
+			go cli.sender()
 			return cli, nil
 
 		}
@@ -129,9 +131,12 @@ func (c *client) receiver() {
 			c.acks <- m
 		case MsgData:
 			if m.SeqNum == expectedSeqNum {
+				// in order
 				expectedSeqNum++
 				c.data <- m
 			} else {
+				// out of order
+				// TODO: it's better to not to ignore them
 			}
 
 			// Send ACK
@@ -146,8 +151,22 @@ func (c *client) sender() {
 	var lastMessage *Message
 	for {
 		if lastMessage != nil {
-			select {}
+			select {
+			case m := <-c.window:
+				lastMessage = &m
+			case <-c.acks:
+			}
 		} else {
+			select {
+			case a := <-c.acks:
+				if a.SeqNum > lastMessage.SeqNum {
+					// TODO: it's better to ignore more packets here
+					lastMessage = nil
+				} else {
+					b, _ := json.Marshal(lastMessage)
+					c.udpConn.Write(b)
+				}
+			}
 		}
 	}
 }
@@ -165,6 +184,9 @@ func (c *client) Write(payload []byte) error {
 	// Marshaling and send
 	b, _ := json.Marshal(m)
 	_, err := c.udpConn.Write(b)
+
+	c.window <- *m
+
 	return err
 }
 
