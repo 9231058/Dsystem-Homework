@@ -4,6 +4,7 @@ package lsp
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -11,16 +12,21 @@ import (
 )
 
 type client struct {
-	id int
-	sq int
+	id  int
+	tsq int // Transmitted sq
+	rsq int // Received sq
 
-	timeout int
-	retries int
-	window  chan Message
+	retries   int
+	windows   int
+	timer     <-chan time.Time
+	incomming chan Message
 
 	udpConn *net.UDPConn
-	acks    chan Message
-	data    chan Message
+	rbuffer map[int]Message
+	rmsg    chan Message
+
+	tbuffer map[int]Message
+	tmsg    chan Message
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -85,19 +91,25 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		case mr := <-messageEvents:
 			// Connection is accpeted
 			cli := &client{
-				id: mr.ConnID,
-				sq: 1,
+				id:  mr.ConnID,
+				tsq: 1,
+				rsq: 1,
 
 				udpConn: conn,
-				acks:    make(chan Message, params.WindowSize),
-				data:    make(chan Message, params.WindowSize),
+				tbuffer: make(map[int]Message),
+				tmsg:    make(chan Message, 1024),
 
-				timeout: params.EpochMillis,
+				rbuffer: make(map[int]Message),
+				rmsg:    make(chan Message, 1024),
+
+				timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
 				retries: params.EpochLimit,
-				window:  make(chan Message, params.WindowSize-1),
+				windows: params.WindowSize,
+
+				incomming: make(chan Message, 1024),
 			}
 			go cli.receiver()
-			go cli.sender()
+			go cli.handle()
 			return cli, nil
 
 		}
@@ -109,7 +121,6 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) receiver() {
-	var expectedSeqNum = 1
 	for {
 		// Read incomming message
 		buff := make([]byte, 1024)
@@ -117,54 +128,84 @@ func (c *client) receiver() {
 		nbytes, err := c.udpConn.Read(buff)
 		if err != nil {
 			log.Fatal(err)
-			continue
+			return
 		}
 		buff = buff[:nbytes]
 		err = json.Unmarshal(buff, &m)
 		if err != nil {
 			log.Fatal(err)
-			continue
+			return
 		}
 
-		switch m.Type {
-		case MsgAck:
-			c.acks <- m
-		case MsgData:
-			if m.SeqNum == expectedSeqNum {
-				// in order
-				expectedSeqNum++
-				c.data <- m
-			} else {
-				// out of order
-				// TODO: it's better to not to ignore them
-			}
-
-			// Send ACK
-			mt := NewAck(c.id, expectedSeqNum)
-			b, _ := json.Marshal(mt)
-			c.udpConn.Write(b)
-		}
+		c.incomming <- m
 	}
 }
 
-func (c *client) sender() {
-	var lastMessage *Message
+func (c *client) handle() {
+	var minUnacked int
+	var maxUnacked int
+
 	for {
-		if lastMessage != nil {
-			select {
-			case m := <-c.window:
-				lastMessage = &m
-			case <-c.acks:
+		minUnacked = maxUnacked
+		for i := range c.tbuffer {
+			if minUnacked > i {
+				minUnacked = i
 			}
-		} else {
-			select {
-			case a := <-c.acks:
-				if a.SeqNum > lastMessage.SeqNum {
-					// TODO: it's better to ignore more packets here
-					lastMessage = nil
+		}
+
+		select {
+		case m := <-c.incomming:
+			fmt.Printf("Receive message %v\n", m)
+			switch m.Type {
+			case MsgAck:
+				if _, ok := c.tbuffer[m.SeqNum]; ok == true {
+					delete(c.tbuffer, m.SeqNum)
+				}
+			case MsgData:
+				if m.SeqNum == c.rsq {
+					// in order
+					c.rmsg <- m
+					c.rsq++
+
+					for {
+						m, ok := c.rbuffer[c.rsq]
+						if !ok {
+							break
+						}
+						c.rsq++
+						c.rmsg <- m
+						delete(c.rbuffer, c.rsq)
+					}
 				} else {
-					b, _ := json.Marshal(lastMessage)
+					// out of order
+					c.rbuffer[m.SeqNum] = m
+				}
+
+				// Send ACK
+				a := NewAck(c.id, c.rsq-1)
+
+				go func() {
+					fmt.Printf("Ack message %v\n", a)
+
+					b, _ := json.Marshal(a)
 					c.udpConn.Write(b)
+				}()
+			}
+		case <-c.timer:
+		default:
+			if maxUnacked-minUnacked < c.windows {
+				select {
+				case m := <-c.tmsg:
+					c.tbuffer[m.SeqNum] = m
+
+					fmt.Printf("Transmit message %v\n", m)
+
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.Write(b)
+					}()
+				default:
 				}
 			}
 		}
@@ -172,22 +213,19 @@ func (c *client) sender() {
 }
 
 func (c *client) Read() ([]byte, error) {
-	m := <-c.data
+	m := <-c.rmsg
+
 	return m.Payload, nil
 }
 
 func (c *client) Write(payload []byte) error {
 	// Create message
-	m := NewData(c.id, c.sq, len(payload), payload)
-	c.sq++
+	m := NewData(c.id, c.tsq, len(payload), payload)
+	c.tsq++
 
-	// Marshaling and send
-	b, _ := json.Marshal(m)
-	_, err := c.udpConn.Write(b)
+	c.tmsg <- *m
 
-	c.window <- *m
-
-	return err
+	return nil
 }
 
 func (c *client) Close() error {
