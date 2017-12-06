@@ -3,47 +3,50 @@
 package lsp
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"sync"
+	"errors"
+	// "fmt"
+	"example.com/lspnet"
+	"strconv"
 	"time"
-
-	net "../lspnet"
 )
 
 type server struct {
-	udpConn *net.UDPConn
-
-	lastConnID int
-
-	incoming chan Message
-	outgoing chan Message
-
-	rmsg chan Message
-
-	connections *sync.Map
+	addr             *lspnet.UDPAddr
+	clients          map[int]*ClientInfo
+	connection       *lspnet.UDPConn
+	inMessagesChan   chan *MessageAndAddr
+	dataBufferChan   chan *DataBufferElement
+	status           Status
+	clientClosedChan chan int
+	clientLostChan   chan *ClientLost
 }
 
-type conn struct {
-	id  int
-	rsq int
-	tsq int
+type MessageAndAddr struct {
+	message *Message
+	addr    *lspnet.UDPAddr
+}
 
-	timer   <-chan time.Time
-	retries int
-	windows int
+type ClientLost struct {
+	connectionId int
+	err          error
+}
 
-	addr    *net.UDPAddr
-	udpConn *net.UDPConn
+type ClientInfo struct {
+	connectionId             int
+	addr                     *lspnet.UDPAddr
+	inMessageChan            chan *Message
+	outMessages              map[int]*Message
+	outMessageChan           chan *Message
+	outMessageSequenceNumber int
+	receivedData             bool
+	dataBuffer               map[int][]byte
+	dataBufferSequenceNumber int
+	closingChan              chan int
+}
 
-	tmsg    chan Message
-	tbuffer map[int]Message
-
-	rmsg    chan Message
-	rbuffer map[int]Message
-
-	incoming chan Message
+type DataBufferElement struct {
+	connectionId int
+	data         []byte
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -53,210 +56,268 @@ type conn struct {
 // project 0, etc.) and immediately return. It should return a non-nil error if
 // there was an error resolving or listening on the specified port number.
 func NewServer(port int, params *Params) (Server, error) {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	addr, err := lspnet.ResolveUDPAddr("udp", "localhost:"+strconv.Itoa(port))
 	if err != nil {
 		return nil, err
 	}
-	uc, err := net.ListenUDP("udp", addr)
+	conn, err := lspnet.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
+
 	s := &server{
-		udpConn:    uc,
-		lastConnID: 73,
+		addr,
+		make(map[int]*ClientInfo),
+		conn,
+		make(chan *MessageAndAddr, 10000),
+		make(chan *DataBufferElement, 10000),
+		NOT_CLOSING,
+		make(chan int, 1000),
+		make(chan *ClientLost, 1000)}
 
-		incoming: make(chan Message, 1024),
-		outgoing: make(chan Message, 1024),
+	go readHandlerForServer(s)
+	go eventLoopForServer(s, params)
 
-		rmsg: make(chan Message, 1024),
-
-		connections: new(sync.Map),
-	}
-	// Handles incomming messages
-	go s.handle()
-	go s.receiver(params)
 	return s, nil
 }
 
-func (s *server) receiver(params *Params) {
-	for {
-		// Read incomming message
-		buff := make([]byte, 2000)
-		var m Message
-		nbytes, addr, err := s.udpConn.ReadFromUDP(buff)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-		buff = buff[:nbytes]
-		err = json.Unmarshal(buff, &m)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-
-		// Connection setup
-		if m.Type == MsgConnect {
-			connID := s.lastConnID
-			s.lastConnID++
-
-			c := &conn{
-				id:  connID,
-				tsq: 1,
-				rsq: 1,
-
-				addr:    addr,
-				udpConn: s.udpConn,
-
-				timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
-				retries: params.EpochLimit,
-				windows: params.WindowSize,
-
-				tmsg:    make(chan Message, 1024),
-				tbuffer: make(map[int]Message),
-
-				rmsg:    s.rmsg,
-				rbuffer: make(map[int]Message),
-
-				incoming: make(chan Message, 1024),
-			}
-			s.connections.Store(connID, c)
-			go c.conn()
-
-			a := NewAck(connID, 0)
-			go func() {
-				b, _ := json.Marshal(a)
-				s.udpConn.WriteToUDP(b, addr)
-			}()
-		} else {
-			s.incoming <- m
-		}
-	}
-
-}
-
-func (s *server) handle() {
-	for {
-		m := <-s.incoming
-		if v, ok := s.connections.Load(m.ConnID); ok == true {
-			c := v.(*conn)
-			c.incoming <- m
-		}
-	}
-}
-
-func (c *conn) conn() {
-	var minUnacked int
-	var maxUnacked int
-	var epochCount int
-
-	for {
-		minUnacked = maxUnacked
-		for i := range c.tbuffer {
-			if minUnacked > i {
-				minUnacked = i
-			}
-		}
-
-		select {
-		case m := <-c.incoming:
-			switch m.Type {
-			case MsgAck:
-				if _, ok := c.tbuffer[m.SeqNum]; ok == true {
-					delete(c.tbuffer, m.SeqNum)
-				}
-			case MsgData:
-				if m.SeqNum == c.rsq {
-					// in order
-					c.rmsg <- m
-					c.rsq++
-
-					for {
-						m, ok := c.rbuffer[c.rsq]
-						if !ok {
-							break
-						}
-						c.rsq++
-						c.rmsg <- m
-						delete(c.rbuffer, c.rsq)
-					}
-				} else {
-					// out of order
-					c.rbuffer[m.SeqNum] = m
-				}
-
-				// Send ACK
-				a := NewAck(c.id, m.SeqNum)
-
-				go func() {
-					b, _ := json.Marshal(a)
-					c.udpConn.WriteToUDP(b, c.addr)
-				}()
-			}
-		case <-c.timer:
-			epochCount++
-
-			if epochCount == c.retries {
-				// TODO: connection lost
-			} else {
-				if c.rsq == 1 {
-					m := NewAck(c.id, 0)
-					go func() {
-						// Marshaling and send
-						b, _ := json.Marshal(m)
-						c.udpConn.WriteToUDP(b, c.addr)
-					}()
-				}
-				for _, m := range c.tbuffer {
-					go func() {
-						// Marshaling and send
-						b, _ := json.Marshal(m)
-						c.udpConn.WriteToUDP(b, c.addr)
-
-					}()
-				}
-			}
-		default:
-			if maxUnacked-minUnacked < c.windows {
-				select {
-				case m := <-c.tmsg:
-					c.tbuffer[m.SeqNum] = m
-
-					go func() {
-						// Marshaling and send
-						b, _ := json.Marshal(m)
-						c.udpConn.WriteToUDP(b, c.addr)
-					}()
-				default:
-				}
-			}
-		}
-	}
-
-}
-
 func (s *server) Read() (int, []byte, error) {
-	message := <-s.rmsg
-
-	return message.ConnID, message.Payload, nil
+	select {
+	case element := <-s.dataBufferChan:
+		return element.connectionId, element.data, nil
+	case lost := <-s.clientLostChan:
+		return lost.connectionId, nil, lost.err
+	}
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	if v, ok := s.connections.Load(connID); ok == true {
-		c := v.(*conn)
+	// fmt.Printf("[Server] Write Data to Client %v\n", connID)
 
-		m := NewData(connID, c.tsq, len(payload), payload)
-		c.tsq++
-		c.tmsg <- *m
-	}
+	client := s.clients[connID]
+	message := NewData(connID, -1, len(payload), payload)
+	client.outMessageChan <- message
 
 	return nil
 }
 
 func (s *server) CloseConn(connID int) error {
+	// fmt.Printf("[Server] Close Client %v\n", connID)
+
+	s.clientClosedChan <- connID
+
 	return nil
 }
 
 func (s *server) Close() error {
-	return s.udpConn.Close()
+	s.status = START_CLOSING
+
+	for {
+		if s.status == HANDLER_CLOSED {
+			s.connection.Close()
+		}
+		if s.status == CONNECTION_CLOSED {
+			// fmt.Printf("[Server] Server Closed!\n")
+			return nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func readHandlerForServer(s *server) {
+	for {
+		inMessage, clientAddr, err := ReadMessage(s.connection)
+		// fmt.Printf("[Server] Receive Message: %v\n", inMessage)
+		if err != nil {
+			// fmt.Printf("[Server] Read Error: %v\n", err)
+			if s.status == HANDLER_CLOSED {
+				s.status = CONNECTION_CLOSED
+				// fmt.Printf("[Server] Connection Closed!\n")
+				return
+			}
+		} else {
+			s.inMessagesChan <- &MessageAndAddr{inMessage, clientAddr}
+		}
+	}
+}
+
+func eventLoopForServer(s *server, params *Params) {
+	connectionId := 1
+
+	for {
+		select {
+		case messageAndAddr := <-s.inMessagesChan:
+			inMessage := messageAndAddr.message
+			clientAddr := messageAndAddr.addr
+			// fmt.Printf("[Server] Client %v Request: %v\n", inMessage.ConnID, inMessage)
+
+			switch inMessage.Type {
+			case MsgConnect:
+				duplicate := false
+				for _, client := range s.clients {
+					// fmt.Printf("Addr: %v, Addr: %v\n", client.addr, clientAddr)
+					if client.addr.String() == clientAddr.String() {
+						duplicate = true
+						break
+					}
+				}
+				if duplicate {
+					continue
+				}
+
+				// fmt.Printf("New Connection From Client %v\n", connectionId)
+
+				// create new client info
+				client := &ClientInfo{
+					connectionId,
+					clientAddr,
+					make(chan *Message, 1000),
+					make(map[int]*Message),
+					make(chan *Message, 1000),
+					1,
+					false,
+					make(map[int][]byte),
+					1,
+					make(chan int, 1000)}
+				s.clients[connectionId] = client
+				connectionId += 1
+				go writeHandlerForClient(s, client, params)
+
+				// send ack
+				// fmt.Printf("New Connection Ack to Client %v\n", connectionId-1)
+				response := NewAck(client.connectionId, 0)
+				go WriteMessage(s.connection, clientAddr, response)
+			default:
+				client, exists := s.clients[inMessage.ConnID]
+				if exists {
+					client.inMessageChan <- inMessage
+				}
+			}
+
+		case connectionId := <-s.clientClosedChan:
+			// fmt.Printf("[Server] Client %v Closed!\n", connectionId)
+
+			client, exists := s.clients[connectionId]
+			if exists {
+				client.closingChan <- 1
+			}
+			delete(s.clients, connectionId)
+
+			if len(s.clients) == 0 && s.status == START_CLOSING {
+				// fmt.Printf("[Server] All Clients Closed!\n")
+				s.status = HANDLER_CLOSED
+				return
+			}
+		}
+	}
+}
+
+func writeHandlerForClient(s *server, c *ClientInfo, params *Params) {
+	epochCount := 0
+	timer := time.NewTimer(time.Duration(params.EpochMillis) * time.Millisecond)
+
+	for {
+		if s.status == START_CLOSING && len(c.outMessages) == 0 && len(c.dataBuffer) == 0 && len(c.outMessageChan) == 0 {
+			s.clientClosedChan <- c.connectionId
+			return
+		}
+
+		minUnAckedOutMessageSequenceNumber := c.outMessageSequenceNumber
+		for sequenceNumber, _ := range c.outMessages {
+			if minUnAckedOutMessageSequenceNumber > sequenceNumber {
+				minUnAckedOutMessageSequenceNumber = sequenceNumber
+			}
+		}
+
+		select {
+		case <-c.closingChan:
+			return
+
+		case inMessage := <-c.inMessageChan:
+			// fmt.Printf("[Server] New Message From Client %v\n", c.connectionId)
+
+			epochCount = 0
+			switch inMessage.Type {
+			case MsgData:
+				// fmt.Printf("[Server] New Data From Client %v with Seq %v!\n", c.connectionId, inMessage.SeqNum)
+
+				// save data into buffer
+				if inMessage.Size > len(inMessage.Payload) {
+					continue
+				}
+				inMessage.Payload = inMessage.Payload[0:inMessage.Size]
+
+				_, exists := c.dataBuffer[inMessage.SeqNum]
+				if !exists {
+					c.dataBuffer[inMessage.SeqNum] = inMessage.Payload
+				}
+
+				if inMessage.SeqNum == c.dataBufferSequenceNumber {
+					i := c.dataBufferSequenceNumber
+					for {
+						data, exists := c.dataBuffer[i]
+						if exists {
+							s.dataBufferChan <- &DataBufferElement{c.connectionId, data}
+							c.dataBufferSequenceNumber += 1
+							delete(c.dataBuffer, i)
+						} else {
+							break
+						}
+						i += 1
+					}
+				}
+
+				// send ack
+				response := NewAck(c.connectionId, inMessage.SeqNum)
+				go WriteMessage(s.connection, c.addr, response)
+
+			case MsgAck:
+				// fmt.Printf("New Ack From Client: %v!\n", c.connectionId)
+
+				_, exists := c.outMessages[inMessage.SeqNum]
+				if exists {
+					delete(c.outMessages, inMessage.SeqNum)
+				}
+			}
+
+		case <-timer.C:
+			// fmt.Printf("[Server-Client %v] Epoch!\n", c.connectionId)
+
+			epochCount += 1
+
+			if epochCount == params.EpochLimit {
+				// fmt.Printf("[Client %v] Epoch Limit!\n", c.connectionId)
+				s.clientClosedChan <- c.connectionId
+				s.clientLostChan <- &ClientLost{c.connectionId, errors.New("Client Lost!\n")}
+				return
+			} else {
+				if c.dataBufferSequenceNumber == 1 && len(c.dataBuffer) == 0 {
+					outMessage := NewAck(c.connectionId, 0)
+					go WriteMessage(s.connection, c.addr, outMessage)
+				}
+				for _, outMessage := range c.outMessages {
+					// fmt.Printf("[Server-Client %v] Resend Message from Server: %v %v\n", c.connectionId, outMessage.SeqNum, minUnAckedOutMessageSequenceNumber)
+					go WriteMessage(s.connection, c.addr, outMessage)
+				}
+			}
+
+			timer.Reset(time.Duration(params.EpochMillis) * time.Millisecond)
+
+		default:
+			time.Sleep(time.Nanosecond)
+
+			if c.outMessageSequenceNumber-minUnAckedOutMessageSequenceNumber < params.WindowSize {
+				select {
+				case outMessage := <-c.outMessageChan:
+					outMessage.SeqNum = c.outMessageSequenceNumber
+					// fmt.Printf("Server-Client Write Message: %v %v\n", outMessage, minUnAckedOutMessageSequenceNumber)
+
+					c.outMessages[c.outMessageSequenceNumber] = outMessage
+					c.outMessageSequenceNumber += 1
+					go WriteMessage(s.connection, c.addr, outMessage)
+
+				default:
+				}
+			}
+		}
+	}
 }
