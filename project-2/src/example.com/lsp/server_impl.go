@@ -18,7 +18,7 @@ type server struct {
 
 	incoming chan *addressableMessage
 
-	rmsg chan *DataBufferElement
+	rmsg chan *clientData
 
 	status           Status
 	clientClosedChan chan int
@@ -43,9 +43,9 @@ type clientInfo struct {
 	closingChan chan int
 }
 
-type DataBufferElement struct {
-	connectionId int
-	data         []byte
+type clientData struct {
+	id   int
+	data []byte
 }
 
 type addressableMessage struct {
@@ -83,7 +83,7 @@ func NewServer(port int, params *Params) (Server, error) {
 
 		incoming: make(chan *addressableMessage, 10000),
 
-		rmsg: make(chan *DataBufferElement, 10000),
+		rmsg: make(chan *clientData, 10000),
 
 		status:           NotClosing,
 		clientClosedChan: make(chan int, 1000),
@@ -99,7 +99,7 @@ func NewServer(port int, params *Params) (Server, error) {
 func (s *server) Read() (int, []byte, error) {
 	select {
 	case element := <-s.rmsg:
-		return element.connectionId, element.data, nil
+		return element.id, element.data, nil
 	case lost := <-s.clientLostChan:
 		return lost.connectionId, nil, lost.err
 	}
@@ -263,7 +263,7 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 						if !ok {
 							break
 						}
-						s.rmsg <- &DataBufferElement{c.id, data}
+						s.rmsg <- &clientData{c.id, data}
 						c.rsq++
 						delete(c.rbuffer, i)
 						i++
