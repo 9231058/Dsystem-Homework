@@ -122,7 +122,7 @@ func (c *client) ConnID() int {
 func (c *client) receiver() {
 	for {
 		// Read incomming message
-		buff := make([]byte, 1024)
+		buff := make([]byte, 2000)
 		var m Message
 		nbytes, err := c.udpConn.Read(buff)
 		if err != nil {
@@ -181,7 +181,7 @@ func (c *client) handle() {
 				}
 
 				// Send ACK
-				a := NewAck(c.id, c.rsq-1)
+				a := NewAck(c.id, m.SeqNum)
 
 				go func() {
 					b, _ := json.Marshal(a)

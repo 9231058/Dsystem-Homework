@@ -20,6 +20,8 @@ type server struct {
 	incoming chan Message
 	outgoing chan Message
 
+	rmsg chan Message
+
 	connections *sync.Map
 }
 
@@ -66,6 +68,8 @@ func NewServer(port int, params *Params) (Server, error) {
 		incoming: make(chan Message, 1024),
 		outgoing: make(chan Message, 1024),
 
+		rmsg: make(chan Message, 1024),
+
 		connections: new(sync.Map),
 	}
 	// Handles incomming messages
@@ -77,7 +81,7 @@ func NewServer(port int, params *Params) (Server, error) {
 func (s *server) receiver(params *Params) {
 	for {
 		// Read incomming message
-		buff := make([]byte, 1024)
+		buff := make([]byte, 2000)
 		var m Message
 		nbytes, addr, err := s.udpConn.ReadFromUDP(buff)
 		if err != nil {
@@ -108,11 +112,11 @@ func (s *server) receiver(params *Params) {
 				retries: params.EpochLimit,
 				windows: params.WindowSize,
 
+				tmsg:    make(chan Message, 1024),
 				tbuffer: make(map[int]Message),
-				rbuffer: make(map[int]Message),
 
-				rmsg: make(chan Message, 1024),
-				tmsg: make(chan Message, 1024),
+				rmsg:    s.rmsg,
+				rbuffer: make(map[int]Message),
 
 				incoming: make(chan Message, 1024),
 			}
@@ -120,36 +124,25 @@ func (s *server) receiver(params *Params) {
 			go c.conn()
 
 			a := NewAck(connID, 0)
-			b, _ := json.Marshal(a)
-			s.udpConn.WriteToUDP(b, addr)
+			go func() {
+				b, _ := json.Marshal(a)
+				s.udpConn.WriteToUDP(b, addr)
+			}()
+		} else {
+			s.incoming <- m
 		}
-
-		s.incoming <- m
 	}
 
 }
 
 func (s *server) handle() {
-	go func() {
-		for {
-			m := <-s.incoming
-			if v, ok := s.connections.Load(m.ConnID); ok == true {
-				c := v.(*conn)
-				c.incoming <- m
-			}
+	for {
+		m := <-s.incoming
+		if v, ok := s.connections.Load(m.ConnID); ok == true {
+			c := v.(*conn)
+			c.incoming <- m
 		}
-	}()
-	go func() {
-		for {
-			m := <-s.outgoing
-			if v, ok := s.connections.Load(m.ConnID); ok == true {
-				c := v.(*conn)
-				m.SeqNum = c.tsq
-				c.tsq++
-				c.tmsg <- m
-			}
-		}
-	}()
+	}
 }
 
 func (c *conn) conn() {
@@ -193,7 +186,7 @@ func (c *conn) conn() {
 				}
 
 				// Send ACK
-				a := NewAck(c.id, c.rsq-1)
+				a := NewAck(c.id, m.SeqNum)
 
 				go func() {
 					b, _ := json.Marshal(a)
@@ -243,28 +236,20 @@ func (c *conn) conn() {
 }
 
 func (s *server) Read() (int, []byte, error) {
-	var message Message
-	var connID = -1
-
-	for connID == -1 {
-		s.connections.Range(func(key, value interface{}) bool {
-			conn := value.(*conn)
-
-			select {
-			case message = <-conn.rmsg:
-				connID = conn.id
-				return false
-			default:
-				return true
-			}
-		})
-	}
+	message := <-s.rmsg
 
 	return message.ConnID, message.Payload, nil
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	s.outgoing <- *NewData(connID, 0, len(payload), payload)
+	if v, ok := s.connections.Load(connID); ok == true {
+		c := v.(*conn)
+
+		m := NewData(connID, c.tsq, len(payload), payload)
+		c.tsq++
+		c.tmsg <- *m
+	}
+
 	return nil
 }
 
