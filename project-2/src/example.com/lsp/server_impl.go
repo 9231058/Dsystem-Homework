@@ -4,22 +4,44 @@ package lsp
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	net "../lspnet"
 )
 
 type server struct {
-	udpConn     *net.UDPConn
-	lastConnID  int
+	udpConn *net.UDPConn
+
+	lastConnID int
+
+	incoming chan Message
+	outgoing chan Message
+
 	connections *sync.Map
 }
 
 type conn struct {
-	id   int
-	addr *net.UDPAddr
+	id  int
+	rsq int
+	tsq int
+
+	timer   <-chan time.Time
+	retries int
+	windows int
+
+	addr    *net.UDPAddr
+	udpConn *net.UDPConn
+
+	tmsg    chan Message
+	tbuffer map[int]Message
+
+	rmsg    chan Message
+	rbuffer map[int]Message
+
+	incoming chan Message
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -38,60 +60,196 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	s := &server{
-		udpConn: uc,
+		udpConn:    uc,
+		lastConnID: 73,
+
+		incoming: make(chan Message, 1024),
+		outgoing: make(chan Message, 1024),
+
+		connections: new(sync.Map),
 	}
 	// Handles incomming messages
 	go s.handle()
+	go s.receiver(params)
 	return s, nil
+}
+
+func (s *server) receiver(params *Params) {
+	for {
+		// Read incomming message
+		buff := make([]byte, 1024)
+		var m Message
+		nbytes, addr, err := s.udpConn.ReadFromUDP(buff)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		buff = buff[:nbytes]
+		err = json.Unmarshal(buff, &m)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
+		// Connection setup
+		if m.Type == MsgConnect {
+			connID := s.lastConnID
+			s.lastConnID++
+
+			c := &conn{
+				id:  connID,
+				tsq: 1,
+				rsq: 1,
+
+				addr:    addr,
+				udpConn: s.udpConn,
+
+				timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
+				retries: params.EpochLimit,
+				windows: params.WindowSize,
+
+				tbuffer: make(map[int]Message),
+				rbuffer: make(map[int]Message),
+
+				rmsg: make(chan Message, 1024),
+				tmsg: make(chan Message, 1024),
+
+				incoming: make(chan Message, 1024),
+			}
+			s.connections.Store(connID, c)
+			go c.conn()
+
+			a := NewAck(connID, 0)
+			b, _ := json.Marshal(a)
+			s.udpConn.WriteToUDP(b, addr)
+		}
+
+		s.incoming <- m
+	}
+
 }
 
 func (s *server) handle() {
 	for {
-		buff := make([]byte, 1024)
-		nbytes, addr, err := s.udpConn.ReadFromUDP(buff)
-		if err != nil || nbytes == 0 {
-			continue
-		}
-		buff = buff[:nbytes]
-
-		// Message parsing
-		var mr Message
-		err = json.Unmarshal(buff, &mr)
-		if err != nil {
-			continue
-		}
-
-		// Connection setup
-		if mr.Type == MsgConnect {
-			connID := s.lastConnID
-			s.lastConnID++
-
-			s.connections.Store(connID, &conn{
-				id:   connID,
-				addr: addr,
-			})
-
-			mt := NewAck(connID, 0)
-			b, _ := json.Marshal(mt)
-			s.udpConn.WriteToUDP(b, addr)
+		select {
+		case m := <-s.incoming:
+			if v, ok := s.connections.Load(m.ConnID); ok == true {
+				c := v.(*conn)
+				c.incoming <- m
+			}
+		case m := <-s.outgoing:
+			if v, ok := s.connections.Load(m.ConnID); ok == true {
+				c := v.(*conn)
+				m.SeqNum = c.tsq
+				c.tsq++
+				c.tmsg <- m
+			}
 		}
 	}
 }
 
+func (c *conn) conn() {
+	var minUnacked int
+	var maxUnacked int
+
+	for {
+		minUnacked = maxUnacked
+		for i := range c.tbuffer {
+			if minUnacked > i {
+				minUnacked = i
+			}
+		}
+
+		select {
+		case m := <-c.incoming:
+			fmt.Printf("[s] Receive message %v\n", m)
+			switch m.Type {
+			case MsgAck:
+				if _, ok := c.tbuffer[m.SeqNum]; ok == true {
+					delete(c.tbuffer, m.SeqNum)
+				}
+			case MsgData:
+				if m.SeqNum == c.rsq {
+					// in order
+					c.rmsg <- m
+					c.rsq++
+
+					for {
+						m, ok := c.rbuffer[c.rsq]
+						if !ok {
+							break
+						}
+						c.rsq++
+						c.rmsg <- m
+						delete(c.rbuffer, c.rsq)
+					}
+				} else {
+					// out of order
+					c.rbuffer[m.SeqNum] = m
+				}
+
+				// Send ACK
+				a := NewAck(c.id, c.rsq-1)
+
+				go func() {
+					fmt.Printf("[s] Ack message %v\n", a)
+
+					b, _ := json.Marshal(a)
+					c.udpConn.WriteToUDP(b, c.addr)
+				}()
+			}
+		case <-c.timer:
+		default:
+			if maxUnacked-minUnacked < c.windows {
+				select {
+				case m := <-c.tmsg:
+					c.tbuffer[m.SeqNum] = m
+
+					fmt.Printf("[s] Transmit message %v\n", m)
+
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.WriteToUDP(b, c.addr)
+					}()
+				default:
+				}
+			}
+		}
+	}
+
+}
+
 func (s *server) Read() (int, []byte, error) {
-	// TODO: remove this line when you are ready to begin implementing this method.
-	select {} // Blocks indefinitely.
-	return -1, nil, errors.New("not yet implemented")
+	var message Message
+	var connID = -1
+
+	for connID == -1 {
+		s.connections.Range(func(key, value interface{}) bool {
+			conn := value.(*conn)
+
+			select {
+			case message = <-conn.rmsg:
+				connID = conn.id
+				return false
+			default:
+				return true
+			}
+		})
+	}
+
+	return message.ConnID, message.Payload, nil
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	return errors.New("not yet implemented")
+	s.outgoing <- *NewData(connID, 0, len(payload), payload)
+	return nil
 }
 
 func (s *server) CloseConn(connID int) error {
-	return errors.New("not yet implemented")
+	return nil
 }
 
 func (s *server) Close() error {
-	return errors.New("not yet implemented")
+	return s.udpConn.Close()
 }
