@@ -120,10 +120,10 @@ func (s *server) Write(connID int, payload []byte) error {
 }
 
 func (s *server) CloseConn(connID int) error {
-	c := s.clients[connID]
-
-	if c.status.get() == notClosing {
-		c.status.set(startClosing)
+	if c, ok := s.clients[connID]; ok {
+		if c.status.get() == notClosing {
+			c.status.set(startClosing)
+		}
 	}
 
 	return nil
