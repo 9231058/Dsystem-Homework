@@ -3,7 +3,7 @@
 package lsp
 
 import (
-	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -16,7 +16,7 @@ type server struct {
 
 	udpConn *net.UDPConn
 
-	incoming chan *MessageAndAddr
+	incoming chan *addressableMessage
 
 	rmsg chan *DataBufferElement
 
@@ -38,6 +38,8 @@ type clientInfo struct {
 	rbuffer map[int][]byte
 	rsq     int
 
+	timer <-chan time.Time
+
 	closingChan chan int
 }
 
@@ -46,9 +48,9 @@ type DataBufferElement struct {
 	data         []byte
 }
 
-type MessageAndAddr struct {
-	message *Message
-	addr    *net.UDPAddr
+type addressableMessage struct {
+	Message
+	addr *net.UDPAddr
 }
 
 type ClientLost struct {
@@ -74,11 +76,15 @@ func NewServer(port int, params *Params) (Server, error) {
 	}
 
 	s := &server{
-		clients:          make(map[int]*clientInfo),
-		lastConnID:       73,
-		udpConn:          conn,
-		incoming:         make(chan *MessageAndAddr, 10000),
-		rmsg:             make(chan *DataBufferElement, 10000),
+		clients:    make(map[int]*clientInfo),
+		lastConnID: 73,
+
+		udpConn: conn,
+
+		incoming: make(chan *addressableMessage, 10000),
+
+		rmsg: make(chan *DataBufferElement, 10000),
+
 		status:           NotClosing,
 		clientClosedChan: make(chan int, 1000),
 		clientLostChan:   make(chan *ClientLost, 1000),
@@ -139,7 +145,10 @@ func (s *server) receiver() {
 				return
 			}
 		} else {
-			s.incoming <- &MessageAndAddr{m, addr}
+			s.incoming <- &addressableMessage{
+				*m,
+				addr,
+			}
 		}
 	}
 }
@@ -147,15 +156,16 @@ func (s *server) receiver() {
 func (s *server) handle(params *Params) {
 	for {
 		select {
-		case messageAndAddr := <-s.incoming:
-			inMessage := messageAndAddr.message
-			clientAddr := messageAndAddr.addr
+		case am := <-s.incoming:
+			m := am.Message
+			addr := am.addr
 
-			switch inMessage.Type {
+			switch m.Type {
 			case MsgConnect:
+				// detect duplicate connection request
 				duplicate := false
 				for _, client := range s.clients {
-					if client.addr.String() == clientAddr.String() {
+					if client.addr.String() == addr.String() {
 						duplicate = true
 						break
 					}
@@ -167,7 +177,7 @@ func (s *server) handle(params *Params) {
 				// create new client info
 				client := &clientInfo{
 					id:   s.lastConnID,
-					addr: clientAddr,
+					addr: addr,
 
 					incoming: make(chan *Message, 1024),
 
@@ -178,6 +188,8 @@ func (s *server) handle(params *Params) {
 					rbuffer: make(map[int][]byte),
 					rsq:     1,
 
+					timer: time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
+
 					closingChan: make(chan int, 1000),
 				}
 				s.clients[s.lastConnID] = client
@@ -186,11 +198,11 @@ func (s *server) handle(params *Params) {
 
 				// send ack
 				response := NewAck(client.id, 0)
-				go WriteMessage(s.udpConn, clientAddr, response)
+				go WriteMessage(s.udpConn, addr, response)
 			default:
-				client, exists := s.clients[inMessage.ConnID]
+				client, exists := s.clients[m.ConnID]
 				if exists {
-					client.incoming <- inMessage
+					client.incoming <- &m
 				}
 			}
 
@@ -211,7 +223,6 @@ func (s *server) handle(params *Params) {
 
 func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 	var epochCount int
-	timer := time.NewTimer(time.Duration(params.EpochMillis) * time.Millisecond)
 
 	for {
 		if s.status == StartClosing && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
@@ -219,10 +230,10 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 			return
 		}
 
-		minUnAckedOutMessageSequenceNumber := c.tsq
+		minUnAcked := c.tsq
 		for sq := range c.tbuffer {
-			if minUnAckedOutMessageSequenceNumber > sq {
-				minUnAckedOutMessageSequenceNumber = sq
+			if minUnAcked > sq {
+				minUnAcked = sq
 			}
 		}
 
@@ -269,12 +280,12 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 				}
 			}
 
-		case <-timer.C:
+		case <-c.timer:
 			epochCount++
 
 			if epochCount == params.EpochLimit {
 				s.clientClosedChan <- c.id
-				s.clientLostChan <- &ClientLost{c.id, errors.New("client Lost")}
+				s.clientLostChan <- &ClientLost{c.id, fmt.Errorf("client Lost")}
 				return
 			}
 
@@ -288,7 +299,7 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 		default:
 			time.Sleep(time.Nanosecond)
 
-			if c.tsq-minUnAckedOutMessageSequenceNumber < params.WindowSize {
+			if c.tsq-minUnAcked < params.WindowSize {
 				select {
 				case m := <-c.tmsg:
 					m.SeqNum = c.tsq
