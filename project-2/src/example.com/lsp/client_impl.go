@@ -185,16 +185,15 @@ func (c *client) handler(statusSignal chan int) {
 				m.Payload = m.Payload[0:m.Size]
 
 				// save data into buffer
-				_, exists := c.rbuffer[m.SeqNum]
-				if !exists {
+				if _, ok := c.rbuffer[m.SeqNum]; !ok {
 					c.rbuffer[m.SeqNum] = m.Payload
 				}
 
 				if m.SeqNum == c.rsq {
 					i := c.rsq
 					for {
-						data, exists := c.rbuffer[i]
-						if !exists {
+						data, ok := c.rbuffer[i]
+						if !ok {
 							break
 						}
 						c.rmsg <- data
