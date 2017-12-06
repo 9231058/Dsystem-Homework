@@ -209,9 +209,8 @@ func (c *client) handler(statusSignal chan int) {
 				go WriteMessage(c.udpConn, nil, response)
 
 			case MsgAck:
-				_, exists := c.tbuffer[m.SeqNum]
-				if exists {
-					if m.Type == MsgConnect && c.id < 0 {
+				if v, ok := c.tbuffer[m.SeqNum]; ok == true {
+					if v.Type == MsgConnect && c.id < 0 {
 						c.id = m.ConnID
 						close(statusSignal)
 					}
