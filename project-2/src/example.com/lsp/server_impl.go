@@ -20,14 +20,15 @@ type server struct {
 
 	rmsg chan *clientData
 
-	status           Status
-	clientClosedChan chan int
-	clientLostChan   chan *ClientLost
+	status *status
+	err    chan *clientError
+	cls    chan int
 }
 
 type clientInfo struct {
-	id   int
-	addr *net.UDPAddr
+	id      int
+	addr    *net.UDPAddr
+	udpConn *net.UDPConn
 
 	incoming chan *Message
 
@@ -38,9 +39,11 @@ type clientInfo struct {
 	rbuffer map[int][]byte
 	rsq     int
 
-	timer <-chan time.Time
+	timer   <-chan time.Time
+	retries int
+	windows int
 
-	closingChan chan int
+	status *status
 }
 
 type clientData struct {
@@ -48,14 +51,14 @@ type clientData struct {
 	data []byte
 }
 
+type clientError struct {
+	id  int
+	err error
+}
+
 type addressableMessage struct {
 	Message
 	addr *net.UDPAddr
-}
-
-type ClientLost struct {
-	connectionId int
-	err          error
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -85,9 +88,9 @@ func NewServer(port int, params *Params) (Server, error) {
 
 		rmsg: make(chan *clientData, 10000),
 
-		status:           NotClosing,
-		clientClosedChan: make(chan int, 1000),
-		clientLostChan:   make(chan *ClientLost, 1000),
+		status: newStatus(),
+		err:    make(chan *clientError, 1024),
+		cls:    make(chan int, 1024),
 	}
 
 	go s.receiver()
@@ -100,8 +103,8 @@ func (s *server) Read() (int, []byte, error) {
 	select {
 	case element := <-s.rmsg:
 		return element.id, element.data, nil
-	case lost := <-s.clientLostChan:
-		return lost.connectionId, nil, lost.err
+	case lost := <-s.err:
+		return lost.id, nil, lost.err
 	}
 }
 
@@ -117,19 +120,29 @@ func (s *server) Write(connID int, payload []byte) error {
 }
 
 func (s *server) CloseConn(connID int) error {
-	s.clientClosedChan <- connID
+	c := s.clients[connID]
+
+	if c.status.get() == notClosing {
+		c.status.set(startClosing)
+	}
 
 	return nil
 }
 
 func (s *server) Close() error {
-	s.status = StartClosing
+	s.status.set(startClosing)
+
+	for _, c := range s.clients {
+		if c.status.get() == notClosing {
+			c.status.set(startClosing)
+		}
+	}
 
 	for {
-		if s.status == HandlerClosed {
+		if s.status.get() == handlerClosed {
 			s.udpConn.Close()
 		}
-		if s.status == ConnectionClosed {
+		if s.status.get() == connectionClosed {
 			return nil
 		}
 		time.Sleep(time.Millisecond)
@@ -140,8 +153,8 @@ func (s *server) receiver() {
 	for {
 		m, addr, err := ReadMessage(s.udpConn)
 		if err != nil {
-			if s.status == HandlerClosed {
-				s.status = ConnectionClosed
+			if s.status.get() == handlerClosed {
+				s.status.set(connectionClosed)
 				return
 			}
 		} else {
@@ -176,8 +189,9 @@ func (s *server) handle(params *Params) {
 
 				// create new client info
 				client := &clientInfo{
-					id:   s.lastConnID,
-					addr: addr,
+					id:      s.lastConnID,
+					addr:    addr,
+					udpConn: s.udpConn,
 
 					incoming: make(chan *Message, 1024),
 
@@ -188,13 +202,15 @@ func (s *server) handle(params *Params) {
 					rbuffer: make(map[int][]byte),
 					rsq:     1,
 
-					timer: time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
+					timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
+					retries: params.EpochLimit,
+					windows: params.WindowSize,
 
-					closingChan: make(chan int, 1000),
+					status: newStatus(),
 				}
 				s.clients[s.lastConnID] = client
 				s.lastConnID++
-				go writeHandlerForClient(s, client, params)
+				go client.handleClient(s)
 
 				// send ack
 				response := NewAck(client.id, 0)
@@ -206,27 +222,26 @@ func (s *server) handle(params *Params) {
 				}
 			}
 
-		case connectionId := <-s.clientClosedChan:
-			client, exists := s.clients[connectionId]
-			if exists {
-				client.closingChan <- 1
+		case id := <-s.cls:
+			if _, ok := s.clients[id]; ok {
+				delete(s.clients, id)
 			}
-			delete(s.clients, connectionId)
 
-			if len(s.clients) == 0 && s.status == StartClosing {
-				s.status = HandlerClosed
+			if len(s.clients) == 0 && s.status.get() == startClosing {
+				s.status.set(handlerClosed)
 				return
 			}
 		}
 	}
 }
 
-func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
+func (c *clientInfo) handleClient(s *server) {
 	var epochCount int
 
 	for {
-		if s.status == StartClosing && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
-			s.clientClosedChan <- c.id
+		if c.status.get() == startClosing && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
+			c.status.set(handlerClosed)
+			s.cls <- c.id
 			return
 		}
 
@@ -238,9 +253,6 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 		}
 
 		select {
-		case <-c.closingChan:
-			return
-
 		case m := <-c.incoming:
 			epochCount = 0
 
@@ -283,9 +295,13 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 		case <-c.timer:
 			epochCount++
 
-			if epochCount == params.EpochLimit {
-				s.clientClosedChan <- c.id
-				s.clientLostChan <- &ClientLost{c.id, fmt.Errorf("client Lost")}
+			if epochCount == c.retries {
+				s.cls <- c.id
+				s.err <- &clientError{
+					id:  c.id,
+					err: fmt.Errorf("[s] client %d: Connection lost", c.id),
+				}
+				c.status.set(handlerClosed)
 				return
 			}
 
@@ -299,7 +315,7 @@ func writeHandlerForClient(s *server, c *clientInfo, params *Params) {
 		default:
 			time.Sleep(time.Nanosecond)
 
-			if c.tsq-minUnAcked < params.WindowSize {
+			if c.tsq-minUnAcked < c.windows {
 				select {
 				case m := <-c.tmsg:
 					m.SeqNum = c.tsq

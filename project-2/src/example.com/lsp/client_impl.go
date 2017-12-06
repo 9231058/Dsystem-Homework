@@ -26,7 +26,7 @@ type client struct {
 	rsq     int
 
 	err     chan error
-	status  Status
+	status  *status
 	timer   <-chan time.Time
 	retries int
 	windows int
@@ -69,7 +69,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		rsq:     1,
 
 		err:     make(chan error, 1),
-		status:  NotClosing,
+		status:  newStatus(),
 		timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
 		retries: params.EpochLimit,
 		windows: params.WindowSize,
@@ -117,15 +117,16 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	if c.status == NotClosing {
-		c.status = StartClosing
+	if c.status.get() == notClosing {
+		c.status.set(startClosing)
 	}
 
 	for {
-		if c.status == HandlerClosed {
+		if c.status.get() == handlerClosed {
 			c.udpConn.Close()
 		}
-		if c.status == ConnectionClosed {
+		if c.status.get() == connectionClosed {
+			c.status.set(closed)
 			return nil
 		}
 		time.Sleep(time.Millisecond)
@@ -137,7 +138,7 @@ func (c *client) receiver() {
 		m, _, err := ReadMessage(c.udpConn)
 		if err != nil {
 			if c.id > 0 {
-				c.status = ConnectionClosed
+				c.status.set(connectionClosed)
 				return
 			}
 		} else {
@@ -150,8 +151,8 @@ func (c *client) handler(statusSignal chan int) {
 	var epochCount int
 
 	for {
-		if c.status == StartClosing && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
-			c.status = HandlerClosed
+		if c.status.get() == startClosing && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
+			c.status.set(handlerClosed)
 			return
 		}
 
@@ -212,7 +213,7 @@ func (c *client) handler(statusSignal chan int) {
 
 			if epochCount == c.retries {
 				c.err <- fmt.Errorf("[c] client %d: Connection Lost", c.id)
-				c.status = HandlerClosed
+				c.status.set(handlerClosed)
 				return
 			}
 			if c.id < 0 {
