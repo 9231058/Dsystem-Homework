@@ -16,10 +16,10 @@ type client struct {
 	tsq int // Transmitted sq
 	rsq int // Received sq
 
-	retries   int
-	windows   int
-	timer     <-chan time.Time
-	incomming chan Message
+	retries  int
+	windows  int
+	timer    <-chan time.Time
+	incoming chan Message
 
 	udpConn *net.UDPConn
 	rbuffer map[int]Message
@@ -106,7 +106,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				retries: params.EpochLimit,
 				windows: params.WindowSize,
 
-				incomming: make(chan Message, 1024),
+				incoming: make(chan Message, 1024),
 			}
 			go cli.receiver()
 			go cli.handle()
@@ -137,7 +137,7 @@ func (c *client) receiver() {
 			return
 		}
 
-		c.incomming <- m
+		c.incoming <- m
 	}
 }
 
@@ -154,7 +154,7 @@ func (c *client) handle() {
 		}
 
 		select {
-		case m := <-c.incomming:
+		case m := <-c.incoming:
 			fmt.Printf("Receive message %v\n", m)
 			switch m.Type {
 			case MsgAck:
