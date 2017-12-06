@@ -4,25 +4,29 @@ package lsp
 
 import (
 	"errors"
-	// "fmt"
-	"example.com/lspnet"
-	"time"
+	"fmt"
 	"log"
+	"time"
+
+	net "../lspnet"
 )
 
 type client struct {
-	lspServerAddr               *lspnet.UDPAddr
-	connectionId             int
-	lspServerConn               *lspnet.UDPConn
-	inMessages               chan *Message
-	outMessages              map[int]*Message
-	outMessageChan           chan *Message
-	outMessageSequenceNumber int
-	dataBuffer               map[int][]byte
-	dataBufferChan           chan []byte
-	dataBufferSequenceNumber int
-	connectionError          error
-	status                   Status
+	id      int
+	udpConn *net.UDPConn
+
+	incoming chan *Message
+
+	tbuffer map[int]*Message
+	tmsg    chan *Message
+	tsq     int
+
+	rbuffer map[int][]byte
+	rmsg    chan []byte
+	rsq     int
+
+	err    error
+	status Status
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -36,66 +40,68 @@ type client struct {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
-	lspServerAddr, err := lspnet.ResolveUDPAddr("udp", hostport)
+	addr, err := net.ResolveUDPAddr("udp", hostport)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// get connection
-	lspServerConn, err := lspnet.DialUDP("udp", nil, lspServerAddr)
+	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	clientInit := &client{
-		lspServerAddr,
-		-1,
-		lspServerConn,
-		make(chan *Message, 1000),
-		make(map[int]*Message),
-		make(chan *Message, 1000),
-		0,
-		make(map[int][]byte),
-		make(chan []byte, 1000),
-		1,
-		nil,
-		NOT_CLOSING}
+	cli := &client{
+		id:      -1,
+		udpConn: conn,
+
+		incoming: make(chan *Message, 1024),
+
+		tbuffer: make(map[int]*Message),
+		tmsg:    make(chan *Message, 1000),
+		tsq:     0,
+
+		rbuffer: make(map[int][]byte),
+		rmsg:    make(chan []byte, 1000),
+		rsq:     1,
+
+		err:    nil,
+		status: NOT_CLOSING,
+	}
+
 	statusSignal := make(chan int)
 
 	// send connect message
-	// fmt.Printf("Send Connect Message\n")
-	//new connect message
+	// new connect message
 	connectMessage := NewConnect()
-	clientInit.outMessages[clientInit.outMessageSequenceNumber] = connectMessage
-	clientInit.outMessageSequenceNumber += 1
-	WriteMessage(lspServerConn, nil, connectMessage)
+	cli.tbuffer[cli.tsq] = connectMessage
+	cli.tsq++
+	WriteMessage(conn, nil, connectMessage)
 
-	go readHandlerForClient(clientInit)
-	go eventLoopForClient(clientInit, statusSignal, params)
+	go cli.receiver()
+	go cli.eventLoopForClient(statusSignal, params)
 
 	status := <-statusSignal
 
 	if status == 0 {
-		return clientInit, nil
+		return cli, nil
 	}
 
-	return clientInit, errors.New("Can Not Create New Client!")
+	return cli, errors.New("client creation failed")
 }
 
 func (c *client) ConnID() int {
-	return c.connectionId
+	return c.id
 }
 
 func (c *client) Read() ([]byte, error) {
 	for {
 		select {
-		case data := <-c.dataBufferChan:
+		case data := <-c.rmsg:
 			return data, nil
 		default:
-			// fmt.Printf("[Client %v] Read Error\n", c.connectionId)
-			// fmt.Printf("[Client %v] Connection Error: %v\n", c.connectionId, c.connectionError)
-			if c.connectionError != nil {
-				return nil, c.connectionError
+			if c.err != nil {
+				return nil, c.err
 			}
 		}
 		time.Sleep(time.Microsecond)
@@ -103,10 +109,8 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	// fmt.Printf("[Client %v] Write Data to Server!\n", c.connectionId)
-
-	message := NewData(c.connectionId, -1, len(payload), payload)
-	c.outMessageChan <- message
+	message := NewData(c.id, -1, len(payload), payload)
+	c.tmsg <- message
 
 	return nil
 }
@@ -115,133 +119,118 @@ func (c *client) Close() error {
 	if c.status == NOT_CLOSING {
 		c.status = START_CLOSING
 	}
-	// fmt.Printf("[Client %v] Client Closing!\n", c.connectionId)
 
 	for {
 		if c.status == HANDLER_CLOSED {
-			c.lspServerConn.Close()
+			c.udpConn.Close()
 		}
 		if c.status == CONNECTION_CLOSED {
-			// fmt.Printf("[Client %v] Client Closed!\n", c.connectionId)
 			return nil
 		}
 		time.Sleep(time.Millisecond)
 	}
 }
 
-func readHandlerForClient(c *client) {
+func (c *client) receiver() {
 	for {
-		inMessage, _, err := ReadMessage(c.lspServerConn)
+		m, _, err := ReadMessage(c.udpConn)
 		if err != nil {
-			// fmt.Printf("[Client %v] Error: %v\n", c.connectionId, err)
-			if c.connectionId > 0 {
+			if c.id > 0 {
 				c.status = CONNECTION_CLOSED
 				return
 			}
 		} else {
-			c.inMessages <- inMessage
+			c.incoming <- m
 		}
 	}
 }
 
-func eventLoopForClient(c *client, statusSignal chan int, params *Params) {
-	epochCount := 0
+func (c *client) eventLoopForClient(statusSignal chan int, params *Params) {
+	var epochCount int
 	timer := time.NewTimer(time.Duration(params.EpochMillis) * time.Millisecond)
 
 	for {
-		if c.status == START_CLOSING && len(c.outMessages) == 0 && len(c.dataBuffer) == 0 && len(c.outMessageChan) == 0 {
+		if c.status == START_CLOSING && len(c.tbuffer) == 0 && len(c.rbuffer) == 0 && len(c.tmsg) == 0 {
 			c.status = HANDLER_CLOSED
 			return
 		}
 
-		if c.connectionError != nil {
+		if c.err != nil {
 			c.status = HANDLER_CLOSED
 			return
 		}
 
-		minUnAckedOutMessageSequenceNumber := c.outMessageSequenceNumber
-		for sequenceNumber, _ := range c.outMessages {
-			if minUnAckedOutMessageSequenceNumber > sequenceNumber {
-				minUnAckedOutMessageSequenceNumber = sequenceNumber
+		minUnAcked := c.tsq
+		for sq := range c.tbuffer {
+			if minUnAcked > sq {
+				minUnAcked = sq
 			}
 		}
 
-		// fmt.Printf("[Client %v] Min-UnAcked %v, Next %v\n", c.connectionId, minUnAckedOutMessageSequenceNumber, c.outMessageSequenceNumber)
-		// fmt.Printf("[Client %v] Next Buffer %v\n", c.connectionId, c.dataBufferSequenceNumber)
-
 		select {
-		case inMessage := <-c.inMessages:
-			// fmt.Printf("[Client %v] Server Request: %v\n", c.connectionId, inMessage)
+		case m := <-c.incoming:
 			epochCount = 0
 
-			switch inMessage.Type {
+			switch m.Type {
 			case MsgData:
-				// fmt.Printf("[Client %v] New Data From Server: %v %v!\n", c.connectionId, inMessage.SeqNum, c.dataBufferSequenceNumber)
-
-				if inMessage.Size > len(inMessage.Payload) {
+				// why we need this ? :thinking:
+				if m.Size > len(m.Payload) {
 					continue
 				}
-				inMessage.Payload = inMessage.Payload[0:inMessage.Size]
+				m.Payload = m.Payload[0:m.Size]
 
 				// save data into buffer
-				_, exists := c.dataBuffer[inMessage.SeqNum]
+				_, exists := c.rbuffer[m.SeqNum]
 				if !exists {
-					c.dataBuffer[inMessage.SeqNum] = inMessage.Payload
+					c.rbuffer[m.SeqNum] = m.Payload
 				}
 
-				if inMessage.SeqNum == c.dataBufferSequenceNumber {
-					i := c.dataBufferSequenceNumber
+				if m.SeqNum == c.rsq {
+					i := c.rsq
 					for {
-						data, exists := c.dataBuffer[i]
-						if exists {
-							c.dataBufferChan <- data
-							c.dataBufferSequenceNumber += 1
-							delete(c.dataBuffer, i)
-						} else {
+						data, exists := c.rbuffer[i]
+						if !exists {
 							break
 						}
-						i += 1
+						c.rmsg <- data
+						c.rsq++
+						delete(c.rbuffer, i)
+						i++
 					}
 				}
 
 				// send ack
-				response := NewAck(c.connectionId, inMessage.SeqNum)
-				go WriteMessage(c.lspServerConn, nil, response)
+				response := NewAck(c.id, m.SeqNum)
+				go WriteMessage(c.udpConn, nil, response)
 
 			case MsgAck:
-				// fmt.Printf("Ack From Server!\n")
-
-				outMessage, exists := c.outMessages[inMessage.SeqNum]
+				_, exists := c.tbuffer[m.SeqNum]
 				if exists {
-					if outMessage.Type == MsgConnect && c.connectionId < 0 {
-						c.connectionId = inMessage.ConnID
-						statusSignal <- 0
+					if m.Type == MsgConnect && c.id < 0 {
+						c.id = m.ConnID
+						close(statusSignal)
 					}
-					delete(c.outMessages, inMessage.SeqNum)
+					delete(c.tbuffer, m.SeqNum)
 				}
 			}
 
 		case <-timer.C:
-			// fmt.Printf("[Client %v] Epoch!\n", c.connectionId)
-			epochCount += 1
+			epochCount++
 
 			if epochCount == params.EpochLimit {
-				// fmt.Printf("[Client %v] Epoch Limit!\n", c.connectionId)
-				c.connectionError = errors.New("Lost Connection!")
+				c.err = fmt.Errorf("client %d: Connection Lost", c.id)
 			} else {
-				if c.connectionId < 0 {
-					// fmt.Printf("Send Connect!\n")
-					connectMessage := NewConnect()
-					go WriteMessage(c.lspServerConn, nil, connectMessage)
+				if c.id < 0 {
+					m := NewConnect()
+					go WriteMessage(c.udpConn, nil, m)
 				} else {
-					if c.dataBufferSequenceNumber == 1 && len(c.dataBuffer) == 0 {
-						outMessage := NewAck(c.connectionId, 0)
-						go WriteMessage(c.lspServerConn, nil, outMessage)
+					if c.rsq == 1 && len(c.rbuffer) == 0 {
+						m := NewAck(c.id, 0)
+						go WriteMessage(c.udpConn, nil, m)
 					}
 				}
-				for _, outMessage := range c.outMessages {
-					// fmt.Printf("[Client %v] Resend Message from Client: %v\n", c.connectionId, outMessage)
-					go WriteMessage(c.lspServerConn, nil, outMessage)
+				for _, m := range c.tbuffer {
+					go WriteMessage(c.udpConn, nil, m)
 				}
 			}
 
@@ -250,15 +239,14 @@ func eventLoopForClient(c *client, statusSignal chan int, params *Params) {
 		default:
 			time.Sleep(time.Nanosecond)
 
-			if c.outMessageSequenceNumber-minUnAckedOutMessageSequenceNumber < params.WindowSize {
+			if c.tsq-minUnAcked < params.WindowSize {
 				select {
-				case outMessage := <-c.outMessageChan:
-					outMessage.SeqNum = c.outMessageSequenceNumber
-					// fmt.Printf("[Client %v] Write Message: %v\n", c.connectionId, outMessage)
+				case m := <-c.tmsg:
+					m.SeqNum = c.tsq
 
-					c.outMessages[c.outMessageSequenceNumber] = outMessage
-					c.outMessageSequenceNumber += 1
-					go WriteMessage(c.lspServerConn, nil, outMessage)
+					c.tbuffer[c.tsq] = m
+					c.tsq++
+					go WriteMessage(c.udpConn, nil, m)
 				default:
 				}
 			}
