@@ -155,6 +155,7 @@ func (s *server) handle() {
 func (c *conn) conn() {
 	var minUnacked int
 	var maxUnacked int
+	var epochCount int
 
 	for {
 		minUnacked = maxUnacked
@@ -200,6 +201,28 @@ func (c *conn) conn() {
 				}()
 			}
 		case <-c.timer:
+			epochCount++
+
+			if epochCount == c.retries {
+				// TODO: connection lost
+			} else {
+				if c.rsq == 1 {
+					m := NewAck(c.id, 0)
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.WriteToUDP(b, c.addr)
+					}()
+				}
+				for _, m := range c.tbuffer {
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.WriteToUDP(b, c.addr)
+
+					}()
+				}
+			}
 		default:
 			if maxUnacked-minUnacked < c.windows {
 				select {

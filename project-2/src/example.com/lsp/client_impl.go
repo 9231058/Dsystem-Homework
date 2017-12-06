@@ -143,6 +143,7 @@ func (c *client) receiver() {
 func (c *client) handle() {
 	var minUnacked int
 	var maxUnacked int
+	var epochCount int
 
 	for {
 		minUnacked = maxUnacked
@@ -188,6 +189,29 @@ func (c *client) handle() {
 				}()
 			}
 		case <-c.timer:
+			epochCount++
+
+			if epochCount == c.retries {
+				// TODO: connection lost
+			} else {
+				if c.rsq == 1 {
+					m := NewAck(c.id, 0)
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.Write(b)
+					}()
+				}
+				for _, m := range c.tbuffer {
+					go func() {
+						// Marshaling and send
+						b, _ := json.Marshal(m)
+						c.udpConn.Write(b)
+
+					}()
+				}
+			}
+
 		default:
 			if maxUnacked-minUnacked < c.windows {
 				select {
