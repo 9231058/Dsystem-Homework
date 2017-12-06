@@ -17,6 +17,7 @@ type server struct {
 	udpConn *net.UDPConn
 
 	incoming chan *addressableMessage
+	outgoing chan *Message
 
 	rmsg chan *clientData
 
@@ -86,6 +87,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		udpConn: conn,
 
 		incoming: make(chan *addressableMessage, 10000),
+		outgoing: make(chan *Message, 10000),
 
 		rmsg: make(chan *clientData, 10000),
 
@@ -111,22 +113,14 @@ func (s *server) Read() (int, []byte, error) {
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	client, ok := s.clients[connID]
-	if ok {
-		message := NewData(connID, -1, len(payload), payload)
-		client.tmsg <- message
-	} else {
-	}
+	message := NewData(connID, -1, len(payload), payload)
+	s.outgoing <- message
 
 	return nil
 }
 
 func (s *server) CloseConn(connID int) error {
-	if c, ok := s.clients[connID]; ok {
-		if c.status.get() == notClosing {
-			c.status.set(startClosing)
-		}
-	}
+	s.cls <- connID
 
 	return nil
 }
@@ -214,14 +208,19 @@ func (s *server) handle(params *Params) {
 				response := NewAck(client.id, 0)
 				go WriteMessage(s.udpConn, addr, response)
 			default:
-				client, exists := s.clients[m.ConnID]
-				if exists {
+				if client, ok := s.clients[m.ConnID]; ok {
 					client.incoming <- &m
 				}
 			}
-
+		case m := <-s.outgoing:
+			if client, ok := s.clients[m.ConnID]; ok {
+				client.tmsg <- m
+			}
 		case id := <-s.cls:
-			if _, ok := s.clients[id]; ok {
+			if c, ok := s.clients[id]; ok {
+				if c.status.get() == notClosing {
+					c.status.set(startClosing)
+				}
 				delete(s.clients, id)
 			}
 
