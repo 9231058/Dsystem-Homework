@@ -85,7 +85,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	WriteMessage(conn, nil, connectMessage)
 
 	go cli.receiver()
-	go cli.handler(statusSignal, params)
+	go cli.handler(statusSignal)
 
 	status := <-statusSignal
 
@@ -93,7 +93,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		return cli, nil
 	}
 
-	return cli, errors.New("client creation failed")
+	return nil, errors.New("client creation failed")
 }
 
 func (c *client) ConnID() int {
@@ -151,7 +151,7 @@ func (c *client) receiver() {
 	}
 }
 
-func (c *client) handler(statusSignal chan int, params *Params) {
+func (c *client) handler(statusSignal chan int) {
 	var epochCount int
 
 	for {
