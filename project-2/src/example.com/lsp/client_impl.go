@@ -93,7 +93,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		return cli, nil
 	}
 
-	return nil, errors.New("client creation failed")
+	return nil, errors.New("[c] client creation failed")
 }
 
 func (c *client) ConnID() int {
@@ -155,13 +155,6 @@ func (c *client) handler(statusSignal chan int) {
 			return
 		}
 
-		select {
-		case <-c.err:
-			c.status = HandlerClosed
-			return
-		default:
-		}
-
 		minUnAcked := c.tsq
 		for sq := range c.tbuffer {
 			if minUnAcked > sq {
@@ -218,20 +211,21 @@ func (c *client) handler(statusSignal chan int) {
 			epochCount++
 
 			if epochCount == c.retries {
-				c.err <- fmt.Errorf("client %d: Connection Lost", c.id)
+				c.err <- fmt.Errorf("[c] client %d: Connection Lost", c.id)
+				c.status = HandlerClosed
+				return
+			}
+			if c.id < 0 {
+				m := NewConnect()
+				go WriteMessage(c.udpConn, nil, m)
 			} else {
-				if c.id < 0 {
-					m := NewConnect()
-					go WriteMessage(c.udpConn, nil, m)
-				} else {
-					if c.rsq == 1 && len(c.rbuffer) == 0 {
-						m := NewAck(c.id, 0)
-						go WriteMessage(c.udpConn, nil, m)
-					}
-				}
-				for _, m := range c.tbuffer {
+				if c.rsq == 1 && len(c.rbuffer) == 0 {
+					m := NewAck(c.id, 0)
 					go WriteMessage(c.udpConn, nil, m)
 				}
+			}
+			for _, m := range c.tbuffer {
+				go WriteMessage(c.udpConn, nil, m)
 			}
 		default:
 			time.Sleep(time.Nanosecond)
