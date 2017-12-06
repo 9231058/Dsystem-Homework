@@ -4,7 +4,6 @@ package lsp
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"time"
 
@@ -155,7 +154,6 @@ func (c *client) handle() {
 
 		select {
 		case m := <-c.incoming:
-			fmt.Printf("Receive message %v\n", m)
 			switch m.Type {
 			case MsgAck:
 				if _, ok := c.tbuffer[m.SeqNum]; ok == true {
@@ -185,8 +183,6 @@ func (c *client) handle() {
 				a := NewAck(c.id, c.rsq-1)
 
 				go func() {
-					fmt.Printf("Ack message %v\n", a)
-
 					b, _ := json.Marshal(a)
 					c.udpConn.Write(b)
 				}()
@@ -197,8 +193,6 @@ func (c *client) handle() {
 				select {
 				case m := <-c.tmsg:
 					c.tbuffer[m.SeqNum] = m
-
-					fmt.Printf("Transmit message %v\n", m)
 
 					go func() {
 						// Marshaling and send

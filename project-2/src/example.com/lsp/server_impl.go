@@ -130,14 +130,18 @@ func (s *server) receiver(params *Params) {
 }
 
 func (s *server) handle() {
-	for {
-		select {
-		case m := <-s.incoming:
+	go func() {
+		for {
+			m := <-s.incoming
 			if v, ok := s.connections.Load(m.ConnID); ok == true {
 				c := v.(*conn)
 				c.incoming <- m
 			}
-		case m := <-s.outgoing:
+		}
+	}()
+	go func() {
+		for {
+			m := <-s.outgoing
 			if v, ok := s.connections.Load(m.ConnID); ok == true {
 				c := v.(*conn)
 				m.SeqNum = c.tsq
@@ -145,7 +149,7 @@ func (s *server) handle() {
 				c.tmsg <- m
 			}
 		}
-	}
+	}()
 }
 
 func (c *conn) conn() {
@@ -162,7 +166,6 @@ func (c *conn) conn() {
 
 		select {
 		case m := <-c.incoming:
-			fmt.Printf("[s] Receive message %v\n", m)
 			switch m.Type {
 			case MsgAck:
 				if _, ok := c.tbuffer[m.SeqNum]; ok == true {
@@ -192,8 +195,6 @@ func (c *conn) conn() {
 				a := NewAck(c.id, c.rsq-1)
 
 				go func() {
-					fmt.Printf("[s] Ack message %v\n", a)
-
 					b, _ := json.Marshal(a)
 					c.udpConn.WriteToUDP(b, c.addr)
 				}()
@@ -204,8 +205,6 @@ func (c *conn) conn() {
 				select {
 				case m := <-c.tmsg:
 					c.tbuffer[m.SeqNum] = m
-
-					fmt.Printf("[s] Transmit message %v\n", m)
 
 					go func() {
 						// Marshaling and send
