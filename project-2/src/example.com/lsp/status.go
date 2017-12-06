@@ -3,8 +3,8 @@ package lsp
 import "sync"
 
 type status struct {
-	s    int
-	lock *sync.RWMutex
+	status int
+	lock   *sync.RWMutex
 }
 
 const (
@@ -17,19 +17,19 @@ const (
 
 func newStatus() *status {
 	return &status{
-		s:    notClosing,
-		lock: new(sync.RWLock),
+		status: notClosing,
+		lock:   new(sync.RWMutex),
 	}
 }
 
-func (s *status) set(s int) {
+func (s *status) set(status int) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	s.s = s
+	s.status = status
 }
 
 func (s *status) get() int {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.s
+	return s.status
 }
