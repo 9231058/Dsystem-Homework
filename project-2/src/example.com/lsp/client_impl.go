@@ -25,7 +25,7 @@ type client struct {
 	rmsg    chan []byte
 	rsq     int
 
-	err     error
+	err     chan error
 	status  Status
 	timer   <-chan time.Time
 	retries int
@@ -68,7 +68,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		rmsg:    make(chan []byte, 1000),
 		rsq:     1,
 
-		err:     nil,
+		err:     make(chan error, 1),
 		status:  NotClosing,
 		timer:   time.Tick(time.Duration(params.EpochMillis) * time.Millisecond),
 		retries: params.EpochLimit,
@@ -101,16 +101,11 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	for {
-		select {
-		case data := <-c.rmsg:
-			return data, nil
-		default:
-			if c.err != nil {
-				return nil, c.err
-			}
-		}
-		time.Sleep(time.Microsecond)
+	select {
+	case data := <-c.rmsg:
+		return data, nil
+	case err := <-c.err:
+		return nil, err
 	}
 }
 
@@ -160,9 +155,11 @@ func (c *client) handler(statusSignal chan int) {
 			return
 		}
 
-		if c.err != nil {
+		select {
+		case <-c.err:
 			c.status = HandlerClosed
 			return
+		default:
 		}
 
 		minUnAcked := c.tsq
@@ -221,7 +218,7 @@ func (c *client) handler(statusSignal chan int) {
 			epochCount++
 
 			if epochCount == c.retries {
-				c.err = fmt.Errorf("client %d: Connection Lost", c.id)
+				c.err <- fmt.Errorf("client %d: Connection Lost", c.id)
 			} else {
 				if c.id < 0 {
 					m := NewConnect()
