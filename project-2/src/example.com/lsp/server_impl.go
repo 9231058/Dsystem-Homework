@@ -23,6 +23,7 @@ type server struct {
 	status *status
 	err    chan *clientError
 	cls    chan int
+	bcls   chan int
 }
 
 type clientInfo struct {
@@ -91,6 +92,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		status: newStatus(),
 		err:    make(chan *clientError, 1024),
 		cls:    make(chan int, 1024),
+		bcls:   make(chan int),
 	}
 
 	go s.receiver()
@@ -132,11 +134,7 @@ func (s *server) CloseConn(connID int) error {
 func (s *server) Close() error {
 	s.status.set(startClosing)
 
-	for _, c := range s.clients {
-		if c.status.get() == notClosing {
-			c.status.set(startClosing)
-		}
-	}
+	close(s.bcls)
 
 	for {
 		if s.status.get() == handlerClosed {
@@ -323,6 +321,14 @@ func (c *clientInfo) handleClient(s *server) {
 					c.tbuffer[c.tsq] = m
 					c.tsq++
 					go WriteMessage(s.udpConn, c.addr, m)
+				default:
+				}
+			}
+
+			if c.status.get() == notClosing {
+				select {
+				case <-s.bcls:
+					c.status.set(startClosing)
 				default:
 				}
 			}
