@@ -32,7 +32,7 @@ func ReadMessage(connection *net.UDPConn) (*Message, *net.UDPAddr, error) {
 func WriteMessage(connection *net.UDPConn, addr *net.UDPAddr, message *Message) error {
 	packet, err := json.Marshal(message)
 	if err != nil {
-		log.Fatal("WriteMessage Error: %s\n", err)
+		log.Printf("WriteMessage Error: %s\n", err)
 		return err
 	}
 
@@ -42,7 +42,7 @@ func WriteMessage(connection *net.UDPConn, addr *net.UDPAddr, message *Message) 
 		_, err = connection.Write(packet)
 	}
 	if err != nil {
-		log.Fatal("WriteMessage Error: %s\n", err)
+		log.Printf("WriteMessage Error: %s\n", err)
 		return err
 	}
 
