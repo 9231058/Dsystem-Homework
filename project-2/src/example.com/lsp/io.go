@@ -13,7 +13,7 @@ func ReadMessage(connection *net.UDPConn) (*Message, *net.UDPAddr, error) {
 
 	n, addr, err := connection.ReadFromUDP(packet)
 	if err != nil {
-		log.Fatalf("ReadMessage Error: %s\n", err)
+		log.Printf("ReadMessage Error: %s\n", err)
 		return nil, addr, err
 	}
 
@@ -21,7 +21,7 @@ func ReadMessage(connection *net.UDPConn) (*Message, *net.UDPAddr, error) {
 	var message Message
 	err = json.Unmarshal(packet, &message)
 	if err != nil {
-		log.Fatalf("ReadMessage Error: %s\n", err)
+		log.Printf("ReadMessage Error: %s\n", err)
 		return nil, addr, err
 	}
 	return &message, addr, nil
