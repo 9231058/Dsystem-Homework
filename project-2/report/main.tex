@@ -1,0 +1,106 @@
+\documentclass[paper=a4, fontsize=11pt]{article}
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES AND OTHER DOCUMENT CONFIGURATIONS
+%----------------------------------------------------------------------------------------
+
+\usepackage{amsmath,amsfonts,amsthm} % Math packages
+\usepackage{sectsty} % Allows customizing section commands
+\allsectionsfont{\centering \normalfont\scshape} % Make all sections centered, the default font and small caps
+
+\usepackage{fancyhdr} % Custom headers and footers
+\pagestyle{fancyplain} % Makes all pages in the document conform to the custom headers and footers
+\fancyhead{} % No page header - if you want one, create it in the same way as the footers below
+\fancyfoot[L]{} % Empty left footer
+\fancyfoot[C]{} % Empty center footer
+\fancyfoot[R]{\thepage} % Page numbering for right footer
+\renewcommand{\headrulewidth}{0pt} % Remove header underlines
+\renewcommand{\footrulewidth}{0pt} % Remove footer underlines
+\setlength{\headheight}{13.6pt} % Customize the height of the header
+
+\numberwithin{equation}{section} % Number equations within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+\numberwithin{figure}{section} % Number figures within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+\numberwithin{table}{section} % Number tables within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+
+
+\usepackage{graphicx}
+\graphicspath{ {images/} }
+
+\usepackage{xepersian}
+\settextfont[Path=fonts/]{Vazir.ttf}
+%\setlatintextfont{Times New Roman}
+
+%----------------------------------------------------------------------------------------
+%	TITLE SECTION
+%----------------------------------------------------------------------------------------
+
+\newcommand{\horrule}[1]{\rule{\linewidth}{#1}} % Create horizontal rule command with 1 argument of height
+
+\title{
+\normalfont\normalsize
+\includegraphics[scale=0.1]{aut}
+\hspace{5cm}
+\includegraphics[scale=0.1]{ceit} \\
+\textsc دانشگاه صنعتی امیرکبیر \\
+\textsc دانشکده مهندسی کامپیوتر و فناوری اطلاعات
+\horrule{0.5pt} \\ [0.4cm] % Thin top horizontal rule
+\huge سیستم‌های توزیعی \\ % The assignment title
+\huge فاز اول پروژه دوم \\ % The assignment title
+\horrule{2pt} \\ [0.5cm] % Thick bottom horizontal rule
+}
+
+\author{پرهام الوانی}
+
+\date{\normalsize\today} % Today's date or a custom date
+
+\begin{document}
+
+\maketitle % Print the title
+
+\paragraph{}
+برای پیاده‌سازی پروژه سه گام در نظر گرفته شده است. در اولین گام ارتباط بین سرور و کلاینت پیاده‌سازی شد
+و در گام ارتباط بدون خطا فرض می‌شود.
+در دومین و سومین گام به ترتیب ارتباط دارای خطا و بسته شدن صحیح سرور و کلاینت پیاده‌سازی گشت.
+
+\paragraph{}
+دو قسمت اصلی در کلاینت در نظر گرفته می‌شود، قسمت اول \lr{receiver}
+است که داده‌ها را از سوکت دریافت کرده و در کانال \lr{incoming}
+می‌ریزد. قسمت دوم \lr{handler}
+نام دارد که در واقع قلب سیستم است و تمام کنترل‌ها در آنجا صورت می‌گیرد
+دلیل این امر جلوگیری از وقوع \lr{race condition}
+می‌باشد.
+
+\paragraph{}
+\lr{handler}
+داده‌ها را از کانال \lr{incoming} دریافت می‌کند
+و آن‌ها را در یک \lr{hash map} بر اساس شماره دنباله‌شان ذخیره می‌کند.
+در ادامه پیام‌های \lr{ack} مناسب را تولید می‌کند.
+پیام‌هایی که ترتیب آن‌ها درست است در کانال \lr{rmsg} برای دریافت توسط لایه‌ی بالاتر قرار می‌گیرند.
+
+لایه اپلیکشن هم پیام‌هایی که می‌خواهد ارسال شوند را در کانال \lr{tmsg} قرار می‌دهد.
+\lr{handler} این پیام‌ها را نیز در یک \lr{hash map} بر اساس شماره دنباله‌شان قرار می‌دهد
+با این تفاوت که طول این \lr{hash map} هرگز نباید از \lr{window size (windows)}
+بزرگتر شود.
+با دریافت هر \lr{ack} آن پیام از لیست پیام‌های در حال ارسال حذف می‌شود.
+
+\lr{handler}
+با رویدادهای زمانی که در بازه‌های زمانی \lr{epochMillis} رخ می‌دهند
+سه کار انجام می‌دهد. در صورتی که هیچ پیامی دریافت نشده باشد \lr{ack}
+با شماره دنباله‌ی صفر ارسال می‌کند و اگر داده‌هایی در حال ارسال داشته باشد
+تمام آن‌ها را ارسال می‌کند. در صورتی که هنوز ارتباط با سرور شکل نگرفته باشد پیام
+\lr{connect}
+را باز تکرار می‌کند.
+
+برای بستن ارتباط یک کلاینت دو حالت وجود دارد. در اولین حالت
+ارتباط با سرور \lr{timeout} می‌کند که در این حالت
+ارتباط بدون توجه به وضعیت پیام‌ها بسته می‌شود و پیام خطا در
+کانال \lr{err} قرار می‌گیرد.
+در دومین حالت ارتباط به درخواست کاربر بسته می‌شود که در این حالت
+نیاز است که \lr{handler}
+تمام پیام‌هایی که در صف بافی مانده است را ارسال کند.
+برای مدیریت این شرایط از متغیر \lr{status} استفاده می‌کنیم
+\lr{status}
+در واقع یک مانیتور است که دسترسی به یک \lr{integer}
+را مدیریت می‌کند.
+
+\end{document}
