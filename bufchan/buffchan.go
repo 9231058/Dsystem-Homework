@@ -1,4 +1,4 @@
-package main
+package buffchan
 
 import (
 	"container/list"
@@ -45,6 +45,18 @@ func (b *BufferedChannel) Remove() interface{} {
 	b.l.Remove(v)
 
 	return v.Value
+}
+
+// Inspect first element of list if exists
+func (b *BufferedChannel) Inspect() interface{} {
+	b.m.Lock()
+	defer b.m.Unlock()
+
+	for b.l.Len() == 0 {
+		return nil
+	}
+
+	return b.l.Front().Value
 }
 
 // AsyncRemove removes first element of list asynchronously
