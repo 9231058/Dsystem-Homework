@@ -46,5 +46,35 @@ func main() {
 
 	defer miner.Close()
 
-	// TODO: implement this!
+	// watiing on requests
+	for {
+		b, err := miner.Read()
+		if err != nil {
+			return
+		}
+		var m bitcoin.Message
+		json.Unmarshal(b, &m)
+
+		if m.Type == bitcoin.Request {
+			var minHash uint64
+			var minNonce uint64
+
+			for nonce := m.Lower; nonce <= m.Upper; nonce++ {
+				hash := bitcoin.Hash(m.Data, nonce)
+				if minHash == 0 || minHash > hash {
+					minHash = hash
+					minNonce = nonce
+				}
+			}
+
+			r := bitcoin.NewResult(minHash, minNonce)
+			b, _ := json.Marshal(r)
+			err := miner.Write(b)
+
+			if err != nil {
+				return
+			}
+
+		}
+	}
 }
