@@ -1,25 +1,41 @@
 package main
 
 import (
+	"container/list"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 
-	"example.com/lsp"
+	".."
+	"../../lsp"
 )
+
+type miner struct {
+	id int
+}
 
 type server struct {
 	lspServer lsp.Server
+	miners    *list.List
 }
 
 func startServer(port int) (*server, error) {
-	// TODO: implement this!
+	lspServer, err := lsp.NewServer(port, lsp.NewParams())
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	s := &server{
+		lspServer: lspServer,
+		miners:    list.New(),
+	}
+
+	return s, nil
 }
 
-var LOGF *log.Logger
+var logf *log.Logger
 
 func main() {
 	// You may need a logger for debug purpose
@@ -35,7 +51,7 @@ func main() {
 	}
 	defer file.Close()
 
-	LOGF = log.New(file, "", log.Lshortfile|log.Lmicroseconds)
+	logf = log.New(file, "", log.Lshortfile|log.Lmicroseconds)
 	// Usage: LOGF.Println() or LOGF.Printf()
 
 	const numArgs = 2
@@ -59,5 +75,24 @@ func main() {
 
 	defer srv.lspServer.Close()
 
-	// TODO: implement this!
+	// waiting on requests
+	for {
+		id, b, err := srv.lspServer.Read()
+		if err != nil {
+			continue
+		}
+		var m bitcoin.Message
+		err = json.Unmarshal(b, &m)
+		if err != nil {
+			continue
+		}
+		switch m.Type {
+		case bitcoin.Join:
+			m := &miner{
+				id: id,
+			}
+			logf.Printf("Miner joined [%v]", m)
+			srv.miners.PushBack(m)
+		}
+	}
 }
