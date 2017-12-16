@@ -1,17 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
-	"example.com/lsp"
+	".."
+	"../../lsp"
 )
 
 // Attempt to connect miner as a client to the server.
 func joinWithServer(hostport string) (lsp.Client, error) {
-	// TODO: implement this!
+	c, err := lsp.NewClient(hostport, lsp.NewParams())
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	m := bitcoin.NewJoin()
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	err = c.Write(b)
+	if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func main() {
