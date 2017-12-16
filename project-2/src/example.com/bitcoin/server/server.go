@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/list"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,13 +11,17 @@ import (
 	"../../lsp"
 )
 
-type miner struct {
-	id int
+type task struct {
+	minHash  uint64
+	minNonce uint64
+	miners   int
 }
 
 type server struct {
-	lspServer lsp.Server
-	miners    *list.List
+	lspServer  lsp.Server
+	freeMiners map[int]bool
+	busyMiners map[int]int
+	tasks      map[int]*task
 }
 
 func startServer(port int) (*server, error) {
@@ -28,8 +31,10 @@ func startServer(port int) (*server, error) {
 	}
 
 	s := &server{
-		lspServer: lspServer,
-		miners:    list.New(),
+		lspServer:  lspServer,
+		freeMiners: make(map[int]bool),
+		busyMiners: make(map[int]int),
+		tasks:      make(map[int]*task),
 	}
 
 	return s, nil
@@ -75,7 +80,7 @@ func main() {
 
 	defer srv.lspServer.Close()
 
-	// waiting on requests
+	// waiting on messages
 	for {
 		id, b, err := srv.lspServer.Read()
 		if err != nil {
@@ -88,11 +93,36 @@ func main() {
 		}
 		switch m.Type {
 		case bitcoin.Join:
-			m := &miner{
-				id: id,
+			logf.Printf("Miner joined [%v]", id)
+			srv.freeMiners[id] = true
+		case bitcoin.Request:
+			minersNum := 2
+
+			srv.tasks[id] = &task{
+				miners: minersNum,
 			}
-			logf.Printf("Miner joined [%v]", m)
-			srv.miners.PushBack(m)
+
+			if len(srv.freeMiners) >= minersNum {
+			} else {
+				srv.tasks[id].miners = 0
+			}
+
+		case bitcoin.Result:
+			cid := srv.busyMiners[id]
+			task := srv.tasks[cid]
+			delete(srv.busyMiners, id)
+			srv.freeMiners[id] = true
+
+			task.miners--
+			if task.minHash == 0 || task.minHash < m.Hash {
+				task.minHash = m.Hash
+				task.minNonce = m.Nonce
+			}
+			if task.miners == 0 {
+				r := bitcoin.NewResult(task.minHash, task.minNonce)
+				b, _ := json.Marshal(r)
+				srv.lspServer.Write(cid, b)
+			}
 		}
 	}
 }
