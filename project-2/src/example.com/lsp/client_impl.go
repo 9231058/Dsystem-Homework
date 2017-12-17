@@ -169,12 +169,6 @@ func (c *client) handler(statusSignal chan int) {
 
 			switch m.Type {
 			case MsgData:
-				// why we need this ? :thinking:
-				if m.Size > len(m.Payload) {
-					continue
-				}
-				m.Payload = m.Payload[0:m.Size]
-
 				// save data into buffer
 				if _, ok := c.rbuffer[m.SeqNum]; !ok {
 					c.rbuffer[m.SeqNum] = m.Payload

@@ -256,11 +256,6 @@ func (c *clientInfo) handleClient(s *server) {
 			switch m.Type {
 			case MsgData:
 				// save data into buffer
-				if m.Size > len(m.Payload) {
-					continue
-				}
-				m.Payload = m.Payload[0:m.Size]
-
 				if _, ok := c.rbuffer[m.SeqNum]; !ok {
 					c.rbuffer[m.SeqNum] = m.Payload
 				}
