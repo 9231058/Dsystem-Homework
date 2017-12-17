@@ -4,10 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	".."
 	"../../lsp"
 )
+
+func sendJoinRequest(c lsp.Client) error {
+	m := bitcoin.NewJoin()
+	b, _ := json.Marshal(m)
+	err := c.Write(b)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 // Attempt to connect miner as a client to the server.
 func joinWithServer(hostport string) (lsp.Client, error) {
@@ -16,13 +27,7 @@ func joinWithServer(hostport string) (lsp.Client, error) {
 		return nil, err
 	}
 
-	m := bitcoin.NewJoin()
-	b, err := json.Marshal(m)
-	if err != nil {
-		return nil, err
-	}
-
-	err = c.Write(b)
+	err = sendJoinRequest(c)
 	if err != nil {
 		return nil, err
 	}
@@ -46,10 +51,20 @@ func main() {
 
 	defer miner.Close()
 
+	// send join request for time out avoidance
+	go func() {
+		timer := time.Tick(time.Duration(lsp.DefaultEpochMillis) * time.Millisecond)
+		for {
+			<-timer
+			sendJoinRequest(miner)
+		}
+	}()
+
 	// watiing on requests
 	for {
 		b, err := miner.Read()
 		if err != nil {
+			fmt.Println(err)
 			return
 		}
 		var m bitcoin.Message
