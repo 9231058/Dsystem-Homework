@@ -8,14 +8,12 @@ import (
 	"math"
 	"os"
 	"strconv"
-	"time"
 
 	".."
 	"../../lsp"
 )
 
 type task struct {
-	id   int
 	lost bool
 
 	minHash  uint64
@@ -129,7 +127,7 @@ func (srv *server) receive() {
 }
 
 func (srv *server) schedule() {
-	timer := time.Tick(100)
+	trigger := make(chan struct{}, 1024)
 	for {
 		select {
 		case r := <-srv.requests:
@@ -151,7 +149,8 @@ func (srv *server) schedule() {
 					upper: min(r.upper, uint64(i+1)*step),
 				})
 			}
-		case <-timer:
+			trigger <- struct{}{}
+		case <-trigger:
 			// removes dead miner
 			for me := srv.freeMiners.Front(); me != nil; me = me.Next() {
 				if srv.miners[me.Value.(int)] == nil {
@@ -164,7 +163,6 @@ func (srv *server) schedule() {
 				if srv.pendingRequests.Len() > 0 {
 					re := srv.pendingRequests.Front()
 					r := re.Value.(request)
-					srv.pendingRequests.Remove(re)
 
 					logf.Println(r)
 
@@ -173,13 +171,13 @@ func (srv *server) schedule() {
 
 					m := bitcoin.NewRequest(r.data, r.lower, r.upper)
 					b, _ := json.Marshal(m)
-					go func() {
-						err := srv.lspServer.Write(mid, b)
-						if err != nil {
-							srv.errors <- mid
-						}
-					}()
+					err := srv.lspServer.Write(mid, b)
+					if err != nil {
+						srv.errors <- mid
+						continue
+					}
 
+					srv.pendingRequests.Remove(re)
 					srv.freeMiners.Remove(me)
 					srv.miners[mid] = &miner{
 						clientID: r.id,
@@ -195,6 +193,7 @@ func (srv *server) schedule() {
 			srv.miners[id] = &miner{
 				clientID: 0,
 			}
+			trigger <- struct{}{}
 
 		case r := <-srv.results:
 			miner := srv.miners[r.id]
@@ -221,6 +220,7 @@ func (srv *server) schedule() {
 			}
 			srv.miners[r.id].clientID = 0
 			srv.freeMiners.PushBack(r.id)
+			trigger <- struct{}{}
 
 		case e := <-srv.errors:
 			if mn := srv.miners[e]; mn != nil {
@@ -235,6 +235,7 @@ func (srv *server) schedule() {
 					})
 
 					delete(srv.miners, e)
+					trigger <- struct{}{}
 				} else {
 					logf.Println("Free miner", e)
 					delete(srv.miners, e)
