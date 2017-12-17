@@ -29,6 +29,8 @@ type request struct {
 	lower uint64
 	upper uint64
 	data  string
+
+	reassign bool
 }
 
 type result struct {
@@ -60,6 +62,13 @@ type server struct {
 	tasks map[int]*task
 }
 
+func min(a, b uint64) uint64 {
+	if b > a {
+		return a
+	}
+	return b
+}
+
 func startServer(port int) (*server, error) {
 	lspServer, err := lsp.NewServer(port, lsp.NewParams())
 	if err != nil {
@@ -88,7 +97,6 @@ func (srv *server) receive() {
 	for {
 		id, b, err := srv.lspServer.Read()
 		if err != nil {
-			logf.Println(err)
 			// connection lost event occurred
 			srv.errors <- id
 			continue
@@ -145,8 +153,13 @@ func (srv *server) schedule() {
 
 					logf.Println(r)
 
-					minersNum := int(math.Floor(math.Min(float64(srv.freeMiners.Len()), math.Log(float64(r.upper-r.lower)))))
-					step := (r.upper - r.lower) / uint64(minersNum)
+					var minersNum int
+					if r.reassign {
+						minersNum = 1
+					} else {
+						minersNum = int(math.Floor(math.Min(float64(srv.freeMiners.Len()), math.Log10(float64(r.upper-r.lower)))))
+					}
+					step := uint64(math.Ceil(float64(r.upper-r.lower) / float64(minersNum)))
 
 					srv.tasks[r.id] = &task{
 						miners: minersNum,
@@ -157,12 +170,14 @@ func (srv *server) schedule() {
 						me := srv.freeMiners.Front()
 						mid := me.Value.(int)
 
-						m := bitcoin.NewRequest(r.data, r.lower+uint64(i)*step, r.lower+uint64(i+1)*step)
+						m := bitcoin.NewRequest(r.data, r.lower+uint64(i)*step, min(r.upper, r.lower+uint64(i+1)*step))
 						b, _ := json.Marshal(m)
-						err := srv.lspServer.Write(mid, b)
-						if err != nil {
-							continue
-						}
+						go func() {
+							err := srv.lspServer.Write(mid, b)
+							if err != nil {
+								srv.errors <- mid
+							}
+						}()
 
 						srv.freeMiners.Remove(me)
 						srv.miners[mid] = &miner{
@@ -171,6 +186,7 @@ func (srv *server) schedule() {
 							lower:    m.Lower,
 							data:     m.Data,
 						}
+						logf.Println("***", mid, srv.miners[mid])
 					}
 				}
 			}
@@ -187,9 +203,8 @@ func (srv *server) schedule() {
 			}
 
 			task := srv.tasks[miner.clientID]
-			if task.lost {
-				continue
-			}
+
+			logf.Println("Result", miner.clientID, task.miners)
 
 			task.miners--
 			if task.minHash == 0 || task.minHash < r.hash {
@@ -198,8 +213,10 @@ func (srv *server) schedule() {
 			}
 			if task.miners == 0 {
 				r := bitcoin.NewResult(task.minHash, task.minNonce)
-				b, _ := json.Marshal(r)
-				srv.lspServer.Write(miner.clientID, b)
+				if !task.lost {
+					b, _ := json.Marshal(r)
+					srv.lspServer.Write(miner.clientID, b)
+				}
 				delete(srv.tasks, miner.clientID)
 			}
 			srv.miners[r.id].clientID = 0
@@ -211,10 +228,11 @@ func (srv *server) schedule() {
 					logf.Println("Busy miner", e)
 
 					srv.pendingRequests.PushFront(request{
-						id:    mn.clientID,
-						upper: mn.upper,
-						lower: mn.lower,
-						data:  mn.data,
+						id:       mn.clientID,
+						upper:    mn.upper,
+						lower:    mn.lower,
+						data:     mn.data,
+						reassign: true,
 					})
 
 					delete(srv.miners, e)
