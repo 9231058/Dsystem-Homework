@@ -103,6 +103,19 @@ func main() {
 			}
 
 			if len(srv.freeMiners) >= minersNum {
+				var i uint64
+				for mid := range srv.freeMiners {
+					if i > uint64(minersNum) {
+						break
+					}
+					r := bitcoin.NewRequest(m.Data, i*m.Upper/uint64(minersNum), (i+1)*m.Upper/uint64(minersNum))
+					b, _ := json.Marshal(r)
+					srv.lspServer.Write(mid, b)
+
+					i++
+					delete(srv.freeMiners, mid)
+					srv.busyMiners[mid] = id
+				}
 			} else {
 				srv.tasks[id].miners = 0
 			}
