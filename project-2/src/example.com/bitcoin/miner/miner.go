@@ -71,28 +71,26 @@ func main() {
 
 	// watiing on requests
 	for {
-		LOGF.Println("Wait..")
-
 		b, err := miner.Read()
 		if err != nil {
-			LOGF.Println(err)
 			return
 		}
 		var m bitcoin.Message
-		err = json.Unmarshal(b, &m)
-
-		LOGF.Println("Found: ", m, err)
+		json.Unmarshal(b, &m)
 
 		if m.Type == bitcoin.Request {
-			LOGF.Println("Request: ", m)
-
 			w := int(math.Floor(math.Log(float64(m.Upper - m.Lower))))
+			s := uint64((m.Upper - m.Lower) / uint64(w))
 			rc := make(chan result, 1)
+
+			LOGF.Println("Request: ", w, s)
 
 			for i := 0; i < w; i++ {
 				go func(lower, upper uint64) {
 					var minHash uint64
 					var minNonce uint64
+
+					LOGF.Println("Bound: ", lower, upper)
 
 					for nonce := lower; nonce <= upper; nonce++ {
 						hash := bitcoin.Hash(m.Data, nonce)
@@ -103,7 +101,7 @@ func main() {
 					}
 
 					rc <- result{minNonce, minHash}
-				}(m.Lower+uint64(i)*(m.Upper-m.Lower), m.Lower+uint64(i+1)*(m.Upper-m.Lower))
+				}(m.Lower+uint64(i)*s, m.Lower+uint64(i+1)*s)
 			}
 
 			var minHash uint64
