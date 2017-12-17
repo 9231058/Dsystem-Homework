@@ -3,12 +3,17 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"math"
 	"os"
-	"time"
 
 	".."
 	"../../lsp"
 )
+
+type result struct {
+	nonce, hash uint64
+}
 
 func sendJoinRequest(c lsp.Client) error {
 	m := bitcoin.NewJoin()
@@ -36,6 +41,19 @@ func joinWithServer(hostport string) (lsp.Client, error) {
 }
 
 func main() {
+	const (
+		name = "log.txt"
+		flag = os.O_RDWR | os.O_CREATE
+		perm = os.FileMode(0666)
+	)
+
+	file, err := os.OpenFile(name, flag, perm)
+	if err != nil {
+		return
+	}
+
+	LOGF := log.New(file, "", log.Lshortfile|log.Lmicroseconds)
+
 	const numArgs = 2
 	if len(os.Args) != numArgs {
 		fmt.Printf("Usage: ./%s <hostport>", os.Args[0])
@@ -51,34 +69,52 @@ func main() {
 
 	defer miner.Close()
 
-	// send join request for time out avoidance
-	go func() {
-		timer := time.Tick(time.Duration(lsp.DefaultEpochMillis) * time.Millisecond)
-		for {
-			<-timer
-			sendJoinRequest(miner)
-		}
-	}()
-
 	// watiing on requests
 	for {
+		LOGF.Println("Wait..")
+
 		b, err := miner.Read()
 		if err != nil {
-			fmt.Println(err)
+			LOGF.Println(err)
 			return
 		}
 		var m bitcoin.Message
-		json.Unmarshal(b, &m)
+		err = json.Unmarshal(b, &m)
+
+		LOGF.Println("Found: ", m, err)
 
 		if m.Type == bitcoin.Request {
+			LOGF.Println("Request: ", m)
+
+			w := int(math.Floor(math.Log(float64(m.Upper - m.Lower))))
+			rc := make(chan result, 1)
+
+			for i := 0; i < w; i++ {
+				go func(lower, upper uint64) {
+					var minHash uint64
+					var minNonce uint64
+
+					for nonce := lower; nonce <= upper; nonce++ {
+						hash := bitcoin.Hash(m.Data, nonce)
+						if minHash == 0 || minHash > hash {
+							minHash = hash
+							minNonce = nonce
+						}
+					}
+
+					rc <- result{minNonce, minHash}
+				}(m.Lower+uint64(i)*(m.Upper-m.Lower), m.Lower+uint64(i+1)*(m.Upper-m.Lower))
+			}
+
 			var minHash uint64
 			var minNonce uint64
 
-			for nonce := m.Lower; nonce <= m.Upper; nonce++ {
-				hash := bitcoin.Hash(m.Data, nonce)
-				if minHash == 0 || minHash > hash {
-					minHash = hash
-					minNonce = nonce
+			for w > 0 {
+				r := <-rc
+				w--
+				if minHash == 0 || minHash > r.hash {
+					minHash = r.hash
+					minNonce = r.nonce
 				}
 			}
 
