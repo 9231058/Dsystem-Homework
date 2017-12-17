@@ -29,8 +29,6 @@ type request struct {
 	lower uint64
 	upper uint64
 	data  string
-
-	reassign bool
 }
 
 type result struct {
@@ -135,7 +133,24 @@ func (srv *server) schedule() {
 	for {
 		select {
 		case r := <-srv.requests:
-			srv.pendingRequests.PushBack(r)
+			var minersNum = 1
+			if r.upper > 10000 {
+				minersNum = int(math.Floor(math.Log10(float64(r.upper))))
+			}
+			step := uint64(math.Ceil(float64(r.upper) / float64(minersNum)))
+
+			srv.tasks[r.id] = &task{
+				miners: minersNum,
+			}
+
+			for i := 0; i < minersNum; i++ {
+				srv.pendingRequests.PushBack(request{
+					id:    r.id,
+					data:  r.data,
+					lower: uint64(i) * step,
+					upper: min(r.upper, uint64(i+1)*step),
+				})
+			}
 		case <-timer:
 			// removes dead miner
 			for me := srv.freeMiners.Front(); me != nil; me = me.Next() {
@@ -153,41 +168,26 @@ func (srv *server) schedule() {
 
 					logf.Println(r)
 
-					var minersNum int
-					if r.reassign {
-						minersNum = 1
-					} else {
-						minersNum = int(math.Floor(math.Min(float64(srv.freeMiners.Len()), math.Log10(float64(r.upper-r.lower)))))
-					}
-					step := uint64(math.Ceil(float64(r.upper-r.lower) / float64(minersNum)))
+					me := srv.freeMiners.Front()
+					mid := me.Value.(int)
 
-					srv.tasks[r.id] = &task{
-						miners: minersNum,
-					}
-
-					var i uint64
-					for i = 0; i < uint64(minersNum); i++ {
-						me := srv.freeMiners.Front()
-						mid := me.Value.(int)
-
-						m := bitcoin.NewRequest(r.data, r.lower+uint64(i)*step, min(r.upper, r.lower+uint64(i+1)*step))
-						b, _ := json.Marshal(m)
-						go func() {
-							err := srv.lspServer.Write(mid, b)
-							if err != nil {
-								srv.errors <- mid
-							}
-						}()
-
-						srv.freeMiners.Remove(me)
-						srv.miners[mid] = &miner{
-							clientID: r.id,
-							upper:    m.Upper,
-							lower:    m.Lower,
-							data:     m.Data,
+					m := bitcoin.NewRequest(r.data, r.lower, r.upper)
+					b, _ := json.Marshal(m)
+					go func() {
+						err := srv.lspServer.Write(mid, b)
+						if err != nil {
+							srv.errors <- mid
 						}
-						logf.Println("***", mid, srv.miners[mid])
+					}()
+
+					srv.freeMiners.Remove(me)
+					srv.miners[mid] = &miner{
+						clientID: r.id,
+						upper:    m.Upper,
+						lower:    m.Lower,
+						data:     m.Data,
 					}
+					logf.Println("***", mid, srv.miners[mid])
 				}
 			}
 		case id := <-srv.joins:
@@ -204,10 +204,10 @@ func (srv *server) schedule() {
 
 			task := srv.tasks[miner.clientID]
 
-			logf.Println("Result", miner.clientID, task.miners)
+			logf.Println("Result", miner.clientID, task)
 
 			task.miners--
-			if task.minHash == 0 || task.minHash < r.hash {
+			if task.minHash == 0 || task.minHash > r.hash {
 				task.minHash = r.hash
 				task.minNonce = r.nonce
 			}
@@ -228,11 +228,10 @@ func (srv *server) schedule() {
 					logf.Println("Busy miner", e)
 
 					srv.pendingRequests.PushFront(request{
-						id:       mn.clientID,
-						upper:    mn.upper,
-						lower:    mn.lower,
-						data:     mn.data,
-						reassign: true,
+						id:    mn.clientID,
+						upper: mn.upper,
+						lower: mn.lower,
+						data:  mn.data,
 					})
 
 					delete(srv.miners, e)
