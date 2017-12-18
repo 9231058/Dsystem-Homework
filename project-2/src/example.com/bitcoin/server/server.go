@@ -135,6 +135,11 @@ func (srv *server) schedule() {
 			if r.upper > 10000 {
 				minersNum = int(math.Floor(math.Log10(float64(r.upper))))
 			}
+			if srv.freeMiners.Len() > 0 {
+				if minersNum < srv.freeMiners.Len() {
+					minersNum = srv.freeMiners.Len()
+				}
+			}
 			step := uint64(math.Ceil(float64(r.upper) / float64(minersNum)))
 
 			srv.tasks[r.id] = &task{
