@@ -137,7 +137,7 @@ func (s *server) Close() error {
 		if s.status.get() == connectionClosed {
 			return nil
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Nanosecond)
 	}
 }
 
@@ -255,6 +255,10 @@ func (c *clientInfo) handleClient(s *server) {
 
 			switch m.Type {
 			case MsgData:
+				if len(m.Payload) < m.Size {
+					continue
+				}
+
 				// save data into buffer
 				if _, ok := c.rbuffer[m.SeqNum]; !ok {
 					c.rbuffer[m.SeqNum] = m.Payload
