@@ -151,18 +151,15 @@ func (srv *server) schedule() {
 			}
 			trigger <- struct{}{}
 		case <-trigger:
-			// removes dead miner
-			for me := srv.freeMiners.Front(); me != nil; me = me.Next() {
-				if srv.miners[me.Value.(int)] == nil {
-					srv.freeMiners.Remove(me)
-				}
-			}
-
 			// is there anyone who can do some mining :P
 			if srv.freeMiners.Len() > 0 {
 				if srv.pendingRequests.Len() > 0 {
 					re := srv.pendingRequests.Front()
 					r := re.Value.(request)
+					if srv.tasks[r.id].lost {
+						srv.pendingRequests.Remove(re)
+						continue
+					}
 
 					logf.Println(r)
 
@@ -189,7 +186,7 @@ func (srv *server) schedule() {
 				}
 			}
 		case id := <-srv.joins:
-			srv.freeMiners.PushBack(id)
+			srv.freeMiners.PushFront(id)
 			srv.miners[id] = &miner{
 				clientID: 0,
 			}
@@ -224,7 +221,7 @@ func (srv *server) schedule() {
 
 		case e := <-srv.errors:
 			if mn := srv.miners[e]; mn != nil {
-				if mn.clientID != 0 {
+				if mn.clientID != 0 && !srv.tasks[mn.clientID].lost {
 					logf.Println("Busy miner", e)
 
 					srv.pendingRequests.PushFront(request{
@@ -239,6 +236,13 @@ func (srv *server) schedule() {
 				} else {
 					logf.Println("Free miner", e)
 					delete(srv.miners, e)
+
+					// removes dead miner
+					for me := srv.freeMiners.Front(); me != nil; me = me.Next() {
+						if srv.miners[me.Value.(int)] == nil {
+							srv.freeMiners.Remove(me)
+						}
+					}
 				}
 			} else if task := srv.tasks[e]; task != nil {
 				logf.Println("Client", e)
