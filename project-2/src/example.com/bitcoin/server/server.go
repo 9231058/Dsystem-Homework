@@ -131,22 +131,24 @@ func (srv *server) schedule() {
 	for {
 		select {
 		case r := <-srv.requests:
-			var minersNum = 1
-			if r.upper > 10000 {
-				minersNum = int(math.Floor(math.Log10(float64(r.upper))))
-			}
+			var stride = 1
+			/*
+				if r.upper > 10000 {
+					stride = int(math.Floor(math.Log10(float64(r.upper))))
+				}
+			*/
 			if srv.freeMiners.Len() > 0 {
-				if minersNum < srv.freeMiners.Len() {
-					minersNum = srv.freeMiners.Len()
+				if stride < srv.freeMiners.Len() {
+					stride = srv.freeMiners.Len()
 				}
 			}
-			step := uint64(math.Ceil(float64(r.upper) / float64(minersNum)))
+			step := uint64(math.Ceil(float64(r.upper) / float64(stride)))
 
 			srv.tasks[r.id] = &task{
-				miners: minersNum,
+				miners: stride,
 			}
 
-			for i := 0; i < minersNum; i++ {
+			for i := 0; i < stride; i++ {
 				srv.pendingRequests.PushBack(request{
 					id:    r.id,
 					data:  r.data,
