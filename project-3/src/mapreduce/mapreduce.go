@@ -1,16 +1,18 @@
 package mapreduce
 
-import "fmt"
-import "os"
-import "log"
-import "strconv"
-import "encoding/json"
-import "sort"
-import "container/list"
-import "net/rpc"
-import "net"
-import "bufio"
-import "hash/fnv"
+import (
+	"bufio"
+	"container/list"
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+)
 
 // import "os/exec"
 
@@ -33,9 +35,10 @@ import "hash/fnv"
 // and runs Reduce on those files.  This produces <nReduce> result files,
 // which Merge() merges into a single output.
 
-// Debugging
+// Debug is here for Debugging
 const Debug = 0
 
+// DPrintf prints if debugging is enabled
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		n, err = fmt.Printf(format, a...)
@@ -43,7 +46,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-// Map and Reduce deal with <key, value> pairs:
+// KeyValue pairs are what Map and Reduce deal with
 type KeyValue struct {
 	Key   string
 	Value string
@@ -66,8 +69,7 @@ type MapReduce struct {
 	// add any additional state here
 }
 
-func InitMapReduce(nmap int, nreduce int,
-	file string, master string) *MapReduce {
+func InitMapReduce(nmap int, nreduce int, file string, master string) *MapReduce {
 	mr := new(MapReduce)
 	mr.nMap = nmap
 	mr.nReduce = nreduce
@@ -81,8 +83,8 @@ func InitMapReduce(nmap int, nreduce int,
 	return mr
 }
 
-func MakeMapReduce(nmap int, nreduce int,
-	file string, master string) *MapReduce {
+// MakeMapReduce
+func MakeMapReduce(nmap int, nreduce int, file string, master string) *MapReduce {
 	mr := InitMapReduce(nmap, nreduce, file, master)
 	mr.StartRegistrationServer()
 	go mr.Run()
