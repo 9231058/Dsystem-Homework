@@ -1,10 +1,13 @@
 package main
 
-import "os"
-import "fmt"
-import "mapreduce"
+import (
+	"fmt"
+	"os"
 
-import "container/list"
+	"../mapreduce"
+
+	"container/list"
+)
 
 // our simplified version of MapReduce does not supply a
 // key to the Map function, as in the paper; only a value,
