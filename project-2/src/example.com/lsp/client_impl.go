@@ -129,7 +129,7 @@ func (c *client) Close() error {
 			c.status.set(closed)
 			return nil
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Nanosecond)
 	}
 }
 
@@ -169,12 +169,9 @@ func (c *client) handler(statusSignal chan int) {
 
 			switch m.Type {
 			case MsgData:
-				// why we need this ? :thinking:
-				if m.Size > len(m.Payload) {
+				if len(m.Payload) < m.Size {
 					continue
 				}
-				m.Payload = m.Payload[0:m.Size]
-
 				// save data into buffer
 				if _, ok := c.rbuffer[m.SeqNum]; !ok {
 					c.rbuffer[m.SeqNum] = m.Payload

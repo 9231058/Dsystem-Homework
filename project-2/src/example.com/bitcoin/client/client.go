@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
-	"example.com/lsp"
+	".."
+	"../../lsp"
 )
 
 func main() {
@@ -30,11 +33,37 @@ func main() {
 
 	defer client.Close()
 
-	_ = message  // Keep compiler happy. Please remove!
-	_ = maxNonce // Keep compiler happy. Please remove!
-	// TODO: implement this!
+	r := bitcoin.NewRequest(message, 0, maxNonce)
+	b, _ := json.Marshal(r)
+	err = client.Write(b)
+	if err != nil {
+		printDisconnected()
+	}
 
-	printResult(0, 0)
+	recv := make(chan bitcoin.Message)
+	tout := time.Tick(2000 * time.Millisecond)
+	errc := make(chan error)
+
+	go func() {
+		b, err = client.Read()
+		if err != nil {
+			errc <- err
+			return
+		}
+		var m bitcoin.Message
+		json.Unmarshal(b, &m)
+
+		recv <- m
+	}()
+
+	select {
+	case m := <-recv:
+		printResult(m.Hash, m.Nonce)
+	case <-tout:
+		printDisconnected()
+	case <-errc:
+		printDisconnected()
+	}
 }
 
 // printResult prints the final result to stdout.
