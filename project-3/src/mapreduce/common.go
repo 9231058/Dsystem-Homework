@@ -3,15 +3,17 @@ package mapreduce
 import "fmt"
 import "net/rpc"
 
-const (
-	Map    = "Map"
-	Reduce = "Reduce"
-)
-
+// JobType represents type of job :P
 type JobType string
 
-// RPC arguments and replies.  Field names must start with capital letters,
-// otherwise RPC will break.
+// Map & Reduce JobType
+const (
+	Map    JobType = "Map"
+	Reduce JobType = "Reduce"
+)
+
+// RPC arguments and replies.
+// Field names must start with capital letters, otherwise RPC will break.
 
 type DoJobArgs struct {
 	File          string

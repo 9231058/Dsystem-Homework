@@ -75,7 +75,7 @@ func check(t *testing.T, file string) {
 		if err != nil || v1 != v2 {
 			t.Fatalf("line %d: %d != %d err %v\n", i, v1, v2, err)
 		}
-		i += 1
+		i++
 	}
 	if i != nNumber {
 		t.Fatalf("Expected %d lines in output\n", nNumber)
