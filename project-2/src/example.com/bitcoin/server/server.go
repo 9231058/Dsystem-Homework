@@ -132,11 +132,9 @@ func (srv *server) schedule() {
 		select {
 		case r := <-srv.requests:
 			var stride = 1
-			/*
-				if r.upper > 10000 {
-					stride = int(math.Floor(math.Log10(float64(r.upper))))
-				}
-			*/
+			if r.upper > 10000 {
+				stride = int(math.Floor(math.Log10(float64(r.upper))))
+			}
 			if srv.freeMiners.Len() > 0 {
 				if stride < srv.freeMiners.Len() {
 					stride = srv.freeMiners.Len()
