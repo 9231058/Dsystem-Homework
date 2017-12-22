@@ -23,6 +23,7 @@
 \numberwithin{table}{section} % Number tables within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
 
 
+\usepackage{listings}
 \usepackage{graphicx}
 \graphicspath{ {images/} }
 
@@ -132,5 +133,69 @@
 کلاینت مورد نظر قرار می‌دهد.
 
 \section{فاز دوم}
+\paragraph{}
+در این فاز با استفاده از پروتکل \lr{lsp}
+که در فاز قبل پیاده‌سازی شد یک \lr{distributed bitcoin miner}
+پیاده‌سازی شد.
+
+این فاز از ۳ فایل اصلی تشکیل می‌شود:
+\begin{itemize}
+    \item client.go
+    وظیفه‌ی آن ارسال تقاضا می‌باشد
+    \item server.go
+    وظیفه‌ی مرتب کردن تقاضاها، تخصیص آن‌ها و زمان‌بندی را بر عهده دارد.
+    \item miner.go
+    محاسبات \lr{hash} را در بازه‌ی داده شده انجام می‌دهد.
+\end{itemize}
+
+\paragraph{}
+سرور تقاضاها را دریافت می‌کند، از آنجایی که ممکن است زمان دریافت یک تقاضا هیچ \lr{miner}ای موجود نباشد
+به صورت زیر هر تقاضا به تعدادی زیر تقاضا شکسته شده
+و در نهایت در صف قرار می‌گیرد.
+
+\begin{latin}
+\begin{lstlisting}[caption=Partioning Algorithm]
+var stride = 1
+if r.upper > 10000 {
+	stride = int(math.Floor(math.Log10(float64(r.upper))))
+}
+if srv.freeMiners.Len() > 0 {
+	if stride < srv.freeMiners.Len() {
+		stride = srv.freeMiners.Len()
+	}
+}
+\end{lstlisting}
+\end{latin}
+
+\paragraph{}
+در زمانی که پاسخ هر تقاضا داده می‌شود یا یک \lr{miner} جدید
+به سیستم اضافه می‌شود
+این \lr{miner} به تقاضاهایی که در صف قرار دارند تخصیص داده می‌شود
+در این تخصیص معیار اولویت ترتیب در صف است
+پس برای تقاضاهای \lr{duplicate} که می‌خواهیم اولویت بیشتری داشته باشند
+آن‌ها را در ابتدای صف قرار می‌دهیم.
+
+برای مدیریت بهتر اجرای زمان‌بند، از کانال \lr{trigger}
+استفاده می‌کنیم، این کانال در واقع تعداد بارهایی که قرار است
+زمان‌بند اجرا شود را نگهداری می‌کند و هربار که قرار است
+زمان‌بند اجرا شود یک شی در آن قرار می‌گیرد.
+
+\paragraph{}
+تمام قسمت‌های اصلی سرور در قالب یک حلقه و \lr{select}
+پیاده‌سازی شده است. دلیل این امر کنترل دسترسی به متغیرهای
+مشترک و جلوگیری از \lr{race condition}
+می‌باشد.
+
+\paragraph{}
+پیاده‌سازی \lr{miner}
+به وسیله‌ی \lr{goroutine}ها صورت گرفته است.
+به این ترتیب که برای هر تقاضا تعدادی \lr{goroutine}
+ساخته می‌شود.
+
+\paragraph{}
+پیاده‌سازی \lr{client} بسیار سرراست می‌باشد
+به این ترتیب که فقط منتظر پاسخ یا به پایان رسیدن \lr{timeout}
+می‌شود. برای کنترل همزمان دریافت پاسخ و زمان‌سنج
+از \lr{select} استفاده می‌شود.
 
 \end{document}
