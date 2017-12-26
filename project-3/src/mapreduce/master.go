@@ -41,12 +41,15 @@ L:
 			}
 			var reply DoJobReply
 			ok := call(w, "Worker.DoJob", args, &reply)
-			if ok == false {
+			if !ok {
 				fmt.Printf("DoWork: RPC %s shutdown error\n", w)
+				mr.mapJobs <- j
+				return
 			}
 			if reply.OK {
 				mr.mapDone <- true
 			} else {
+				mr.mapJobs <- j
 				return
 			}
 		case <-mr.reduceStart:
@@ -64,12 +67,15 @@ L:
 			}
 			var reply DoJobReply
 			ok := call(w, "Worker.DoJob", args, &reply)
-			if ok == false {
+			if !ok {
 				fmt.Printf("DoWork: RPC %s shutdown error\n", w)
+				mr.reduceJobs <- j
+				return
 			}
 			if reply.OK {
 				mr.reduceDone <- true
 			} else {
+				mr.reduceJobs <- j
 				return
 			}
 		default:
