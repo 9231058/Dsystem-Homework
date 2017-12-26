@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"../mapreduce"
 
@@ -18,16 +19,16 @@ import (
 // by a mapreduce.KeyValue.
 func Map(value string) *list.List {
 	l := list.New()
-	kv := make(map[string]int)
 
-	for _, s := range strings.Split(value, " ") {
-		kv[s]++
-	}
-
-	for k, v := range kv {
+	for _, s := range strings.FieldsFunc(value, func(r rune) bool {
+		if !unicode.IsLetter(r) {
+			return true
+		}
+		return false
+	}) {
 		l.PushBack(mapreduce.KeyValue{
-			Key:   k,
-			Value: strconv.Itoa(v),
+			Key:   s,
+			Value: "1",
 		})
 	}
 
