@@ -52,6 +52,7 @@ type KeyValue struct {
 	Value string
 }
 
+// MapReduce contains information about the Map Reduce job
 type MapReduce struct {
 	nMap            int    // Number of Map jobs
 	nReduce         int    // Number of Reduce jobs
@@ -67,8 +68,14 @@ type MapReduce struct {
 	Workers map[string]*WorkerInfo
 
 	// add any additional state here
+	mapJobs     chan int
+	mapDone     chan bool
+	reduceStart chan bool
+	reduceJobs  chan int
+	reduceDone  chan bool
 }
 
+// InitMapReduce initiates map reduce structure
 func InitMapReduce(nmap int, nreduce int, file string, master string) *MapReduce {
 	mr := new(MapReduce)
 	mr.nMap = nmap
@@ -80,10 +87,23 @@ func InitMapReduce(nmap int, nreduce int, file string, master string) *MapReduce
 	mr.DoneChannel = make(chan bool)
 
 	// initialize any additional state here
+	mr.Workers = make(map[string]*WorkerInfo)
+	mr.mapJobs = make(chan int, nmap)
+	mr.mapDone = make(chan bool, nmap)
+	for i := 0; i < nmap; i++ {
+		mr.mapJobs <- i
+	}
+	mr.reduceStart = make(chan bool)
+	mr.reduceJobs = make(chan int, nreduce)
+	mr.reduceDone = make(chan bool, nreduce)
+	for i := 0; i < nreduce; i++ {
+		mr.reduceJobs <- i
+	}
+
 	return mr
 }
 
-// MakeMapReduce
+// MakeMapReduce creates map reduce structure and runs registration server
 func MakeMapReduce(nmap int, nreduce int, file string, master string) *MapReduce {
 	mr := InitMapReduce(nmap, nreduce, file, master)
 	mr.StartRegistrationServer()
