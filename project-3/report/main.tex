@@ -1,0 +1,100 @@
+\documentclass[paper=a4, fontsize=11pt]{article}
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES AND OTHER DOCUMENT CONFIGURATIONS
+%----------------------------------------------------------------------------------------
+
+\usepackage{amsmath,amsfonts,amsthm} % Math packages
+\usepackage{sectsty} % Allows customizing section commands
+\allsectionsfont{\centering \normalfont\scshape} % Make all sections centered, the default font and small caps
+
+\usepackage{fancyhdr} % Custom headers and footers
+\pagestyle{fancyplain} % Makes all pages in the document conform to the custom headers and footers
+\fancyhead{} % No page header - if you want one, create it in the same way as the footers below
+\fancyfoot[L]{} % Empty left footer
+\fancyfoot[C]{} % Empty center footer
+\fancyfoot[R]{\thepage} % Page numbering for right footer
+\renewcommand{\headrulewidth}{0pt} % Remove header underlines
+\renewcommand{\footrulewidth}{0pt} % Remove footer underlines
+\setlength{\headheight}{13.6pt} % Customize the height of the header
+
+\numberwithin{equation}{section} % Number equations within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+\numberwithin{figure}{section} % Number figures within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+\numberwithin{table}{section} % Number tables within sections (i.e. 1.1, 1.2, 2.1, 2.2 instead of 1, 2, 3, 4)
+
+
+\usepackage{listings}
+\usepackage{graphicx}
+\graphicspath{ {images/} }
+
+\usepackage{xepersian}
+\settextfont[Path=fonts/]{Vazir.ttf}
+%\setlatintextfont{Times New Roman}
+
+%----------------------------------------------------------------------------------------
+%	TITLE SECTION
+%----------------------------------------------------------------------------------------
+
+\newcommand{\horrule}[1]{\rule{\linewidth}{#1}} % Create horizontal rule command with 1 argument of height
+
+\title{
+\normalfont\normalsize
+\includegraphics[scale=0.1]{aut}
+\hspace{5cm}
+\includegraphics[scale=0.1]{ceit} \\
+\textsc دانشگاه صنعتی امیرکبیر \\
+\textsc دانشکده مهندسی کامپیوتر و فناوری اطلاعات
+\horrule{0.5pt} \\ [0.4cm] % Thin top horizontal rule
+\huge سیستم‌های توزیعی \\ % The assignment title
+\huge پروژه سوم \\ % The assignment title
+\horrule{2pt} \\ [0.5cm] % Thick bottom horizontal rule
+}
+
+\author{پرهام الوانی}
+
+\date{\normalsize\today} % Today's date or a custom date
+
+\begin{document}
+
+\maketitle % Print the title
+
+\paragraph{}
+در فاز اول دو تابع \lr{map} و \lr{reduce}
+با استفاده از تابع \lr{FieldsFunc} در زبان گو
+که برای قطعه قطعه کردن رشته‌ها استفاده می‌شود پیاده‌سازی شدند.
+همانطور که در صورت پروژه نیز شرح داده شده بود قرار بود رشته‌ی ورودی
+با هر کاراکتر غیر از حروف قطعه قطعه شود و
+به این منظور از تابع \lr{IsLetter} استفاده شد.
+
+\paragraph{}
+در فاز دوم یک سیستم توزیع‌شده برای انجام \lr{MapReduce}
+در قالب یک کتابخانه پیاده‌سازی می‌گردد.
+
+یک بخش از کد این کتابخانه در قالب \lr{master}
+وظیفه دارد \lr{register} شدن
+\lr{worker}ها
+را سازمان‌دهی کند و کارهایی که در سیستم موجود است را به آن‌ها تخصیص دهد.
+
+بعد از اتصال هر \lr{worker} یک \lr{go routine}
+برای آن اجرا می‌گردد. این \lr{go routine}
+در ابتدا تلاش می‌کند از کانال تسک‌های \lr{map}
+تسک استخراج کرده و آن را به \lr{worker}
+خود تخصیص دهد. در پایان هر تسک نتیجه‌ی آن
+در کانال \lr{mapDone} منتشر می‌گردد.
+
+بعد از اینکه \lr{master} مطمئن شد نتیجه‌ی تمام \lr{nMap}
+را جمع آوری کرده است با بستن کانال \lr{reduceStart}
+به تمام \lr{go routine}هایی
+که \lr{worker}ها را مدیریت می‌کنند
+اطلاع می‌دهد، می‌توانند وارد تسک‌های \lr{reduce} شوند.
+
+در ادامه همان روند تسک‌های \lr{map} برای تسک‌های \lr{reduce}
+طی شده و نتایج در کانال \lr{reduceDone} منتشر می‌گردد.
+
+با پایان یافتن تسک‌های \lr{reduce} برنامه به صورت کامل خاتمه می‌یابد.
+با توجه به روندی که شرح داده شد اضافه شدن \lr{worker}ها در میانه‌ی کار
+امکان پذیر بوده و در صورت \lr{timeout} شدن هر \lr{worker}
+تسک آن دوباره به کانال تسک‌ها اضافه شده و یک \lr{worker}
+دیگر آن را برعهده خواهد گرفت.
+
+\end{document}
